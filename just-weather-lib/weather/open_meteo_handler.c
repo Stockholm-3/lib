@@ -61,42 +61,50 @@ int open_meteo_handler_current(const char* query_string, char** response_json,
     /* Build structured JSON response */
     json_t* data = json_object();
 
-    /* Location information */
-    json_t* location_obj = json_object();
-    json_object_set_new(location_obj, "latitude", json_real(lat));
-    json_object_set_new(location_obj, "longitude", json_real(lon));
-    json_object_set_new(data, "location", location_obj);
-
-    /* Weather data */
+    /* Weather data - add first (order matches documentation) */
     json_t* weather_obj = json_object();
     json_object_set_new(weather_obj, "temperature",
                         json_real(weather_data->temperature));
     json_object_set_new(weather_obj, "temperature_unit",
                         json_string(weather_data->temperature_unit));
+    json_object_set_new(weather_obj, "windspeed",
+                        json_real(weather_data->windspeed));
+    json_object_set_new(weather_obj, "windspeed_unit",
+                        json_string(weather_data->windspeed_unit));
+    json_object_set_new(weather_obj, "wind_direction_10m",
+                        json_integer(weather_data->winddirection));
+    json_object_set_new(weather_obj, "wind_direction_name",
+                        json_string(open_meteo_api_get_wind_direction(
+                            weather_data->winddirection)));
     json_object_set_new(weather_obj, "weather_code",
                         json_integer(weather_data->weather_code));
     json_object_set_new(weather_obj, "weather_description",
                         json_string(open_meteo_api_get_description(
                             weather_data->weather_code)));
-    json_object_set_new(weather_obj, "windspeed",
-                        json_real(weather_data->windspeed));
-    json_object_set_new(weather_obj, "windspeed_unit",
-                        json_string(weather_data->windspeed_unit));
-    json_object_set_new(weather_obj, "winddirection",
-                        json_integer(weather_data->winddirection));
-    json_object_set_new(weather_obj, "winddirection_name",
-                        json_string(open_meteo_api_get_wind_direction(
-                            weather_data->winddirection)));
+    json_object_set_new(weather_obj, "is_day",
+                        json_integer(weather_data->is_day ? 1 : 0));
+    json_object_set_new(weather_obj, "precipitation",
+                        json_real(weather_data->precipitation));
+    json_object_set_new(weather_obj, "precipitation_unit", json_string("mm"));
     json_object_set_new(weather_obj, "humidity",
                         json_real(weather_data->humidity));
     json_object_set_new(weather_obj, "pressure",
                         json_real(weather_data->pressure));
-    json_object_set_new(weather_obj, "precipitation",
-                        json_real(weather_data->precipitation));
-    json_object_set_new(weather_obj, "is_day",
-                        json_boolean(weather_data->is_day));
+
+    /* Format time as "YYYY-MM-DDTHH:MM" */
+    time_t     now     = time(NULL);
+    struct tm* tm_info = localtime(&now);
+    char       time_str[32];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%dT%H:%M", tm_info);
+    json_object_set_new(weather_obj, "time", json_string(time_str));
 
     json_object_set_new(data, "current_weather", weather_obj);
+
+    /* Location information - add last */
+    json_t* location_obj = json_object();
+    json_object_set_new(location_obj, "latitude", json_real(lat));
+    json_object_set_new(location_obj, "longitude", json_real(lon));
+    json_object_set_new(data, "location", location_obj);
 
     /* Cleanup weather data */
     open_meteo_api_free_current(weather_data);

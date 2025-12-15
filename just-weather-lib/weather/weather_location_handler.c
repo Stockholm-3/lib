@@ -240,9 +240,9 @@ int weather_location_handler_by_city(const char* query_string,
                         json_real(weather_data->windspeed));
     json_object_set_new(weather_obj, "windspeed_unit",
                         json_string(weather_data->windspeed_unit));
-    json_object_set_new(weather_obj, "winddirection",
+    json_object_set_new(weather_obj, "wind_direction_10m",
                         json_integer(weather_data->winddirection));
-    json_object_set_new(weather_obj, "winddirection_name",
+    json_object_set_new(weather_obj, "wind_direction_name",
                         json_string(open_meteo_api_get_wind_direction(
                             weather_data->winddirection)));
     json_object_set_new(weather_obj, "humidity",
@@ -252,7 +252,7 @@ int weather_location_handler_by_city(const char* query_string,
     json_object_set_new(weather_obj, "precipitation",
                         json_real(weather_data->precipitation));
     json_object_set_new(weather_obj, "is_day",
-                        json_boolean(weather_data->is_day));
+                        json_integer(weather_data->is_day ? 1 : 0));
 
     json_object_set_new(data, "current_weather", weather_obj);
 
