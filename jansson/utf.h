@@ -9,24 +9,24 @@
 #define UTF_H
 
 #ifdef HAVE_CONFIG_H
-#include <jansson_private_config.h>
+#    include <jansson_private_config.h>
 #endif
 
 #include "jansson_private.h" /* for container_of() */
-#include <jansson_config.h>  /* for JSON_INLINE */
 
+#include <jansson_config.h> /* for JSON_INLINE */
 #include <stddef.h>
 
 #ifdef HAVE_STDINT_H
-#include <stdint.h>
+#    include <stdint.h>
 #endif
 
-int utf8_encode(int32_t codepoint, char *buffer, size_t *size);
+int utf8_encode(int32_t codepoint, char* buffer, size_t* size);
 
 size_t utf8_check_first(char byte);
-size_t utf8_check_full(const char *buffer, size_t size, int32_t *codepoint);
-const char *utf8_iterate(const char *buffer, size_t size, int32_t *codepoint);
+size_t utf8_check_full(const char* buffer, size_t size, int32_t* codepoint);
+const char* utf8_iterate(const char* buffer, size_t size, int32_t* codepoint);
 
-int utf8_check_string(const char *string, size_t length);
+int utf8_check_string(const char* string, size_t length);
 
 #endif

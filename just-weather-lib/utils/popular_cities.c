@@ -13,21 +13,23 @@
 
 /* ============= Internal Functions ============= */
 
-static int load_cities_from_json(const char* filepath, PopularCity** cities,
-                                 size_t* count);
-static void normalize_query(const char* input, char* output, size_t output_size);
+static int  load_cities_from_json(const char* filepath, PopularCity** cities,
+                                  size_t* count);
+static void normalize_query(const char* input, char* output,
+                            size_t output_size);
 
 /* ============= Public API Implementation ============= */
 
 int popular_cities_load(const char* hot_file, const char* full_file,
-                       PopularCitiesDB** db) {
+                        PopularCitiesDB** db) {
     if (!hot_file || !full_file || !db) {
         fprintf(stderr, "[POPULAR_CITIES] Invalid parameters\n");
         return -1;
     }
 
     /* Allocate database structure */
-    PopularCitiesDB* database = (PopularCitiesDB*)calloc(1, sizeof(PopularCitiesDB));
+    PopularCitiesDB* database =
+        (PopularCitiesDB*)calloc(1, sizeof(PopularCitiesDB));
     if (!database) {
         fprintf(stderr, "[POPULAR_CITIES] Failed to allocate database\n");
         return -2;
@@ -37,7 +39,7 @@ int popular_cities_load(const char* hot_file, const char* full_file,
     printf("[POPULAR_CITIES] Loading hot cities from: %s\n", hot_file);
 
     int result = load_cities_from_json(hot_file, &database->hot_cities,
-                                      &database->hot_count);
+                                       &database->hot_count);
 
     if (result != 0) {
         fprintf(stderr, "[POPULAR_CITIES] Failed to load hot cities\n");
@@ -49,17 +51,17 @@ int popular_cities_load(const char* hot_file, const char* full_file,
 
     /* Save full database path for lazy loading */
     database->full_db_path = strdup(full_file);
-    database->full_cities = NULL;
-    database->full_count = 0;
-    database->full_loaded = false;
+    database->full_cities  = NULL;
+    database->full_count   = 0;
+    database->full_loaded  = false;
 
     *db = database;
     return 0;
 }
 
 int popular_cities_search(PopularCitiesDB* db, const char* query,
-                         PopularCity** results, size_t* count,
-                         size_t max_results) {
+                          PopularCity** results, size_t* count,
+                          size_t max_results) {
     if (!db || !query || !results || !count) {
         return -1;
     }
@@ -80,7 +82,7 @@ int popular_cities_search(PopularCitiesDB* db, const char* query,
     for (size_t i = 0; i < db->hot_count && *count < max_results; i++) {
         char normalized_city[128];
         normalize_query(db->hot_cities[i].name, normalized_city,
-                       sizeof(normalized_city));
+                        sizeof(normalized_city));
 
         /* Prefix match */
         if (strncmp(normalized_city, normalized_query, query_len) == 0) {
@@ -100,14 +102,15 @@ int popular_cities_search(PopularCitiesDB* db, const char* query,
                db->full_db_path);
 
         int result = load_cities_from_json(db->full_db_path, &db->full_cities,
-                                          &db->full_count);
+                                           &db->full_count);
 
         if (result == 0) {
             db->full_loaded = true;
             printf("[POPULAR_CITIES] Loaded %zu cities from full database\n",
                    db->full_count);
         } else {
-            fprintf(stderr, "[POPULAR_CITIES] Failed to lazy load full database\n");
+            fprintf(stderr,
+                    "[POPULAR_CITIES] Failed to lazy load full database\n");
             return 0; /* Return empty results instead of error */
         }
     }
@@ -117,7 +120,7 @@ int popular_cities_search(PopularCitiesDB* db, const char* query,
         for (size_t i = 0; i < db->full_count && *count < max_results; i++) {
             char normalized_city[128];
             normalize_query(db->full_cities[i].name, normalized_city,
-                           sizeof(normalized_city));
+                            sizeof(normalized_city));
 
             /* Prefix match */
             if (strncmp(normalized_city, normalized_query, query_len) == 0) {
@@ -169,7 +172,7 @@ static int load_cities_from_json(const char* filepath, PopularCity** cities,
 
     /* Load JSON file */
     json_error_t error;
-    json_t* root = json_load_file(filepath, 0, &error);
+    json_t*      root = json_load_file(filepath, 0, &error);
 
     if (!root) {
         fprintf(stderr, "[POPULAR_CITIES] JSON load error: %s\n", error.text);
@@ -180,7 +183,9 @@ static int load_cities_from_json(const char* filepath, PopularCity** cities,
     json_t* cities_array = json_object_get(root, "cities");
 
     if (!cities_array || !json_is_array(cities_array)) {
-        fprintf(stderr, "[POPULAR_CITIES] Invalid JSON format: missing 'cities' array\n");
+        fprintf(
+            stderr,
+            "[POPULAR_CITIES] Invalid JSON format: missing 'cities' array\n");
         json_decref(root);
         return -3;
     }
@@ -194,7 +199,8 @@ static int load_cities_from_json(const char* filepath, PopularCity** cities,
     }
 
     /* Allocate cities array */
-    PopularCity* city_list = (PopularCity*)calloc(num_cities, sizeof(PopularCity));
+    PopularCity* city_list =
+        (PopularCity*)calloc(num_cities, sizeof(PopularCity));
 
     if (!city_list) {
         fprintf(stderr, "[POPULAR_CITIES] Failed to allocate cities array\n");
@@ -215,21 +221,22 @@ static int load_cities_from_json(const char* filepath, PopularCity** cities,
         /* Parse name */
         json_t* name = json_object_get(city_obj, "name");
         if (name && json_is_string(name)) {
-            strncpy(city->name, json_string_value(name), sizeof(city->name) - 1);
+            strncpy(city->name, json_string_value(name),
+                    sizeof(city->name) - 1);
         }
 
         /* Parse country */
         json_t* country = json_object_get(city_obj, "country");
         if (country && json_is_string(country)) {
             strncpy(city->country, json_string_value(country),
-                   sizeof(city->country) - 1);
+                    sizeof(city->country) - 1);
         }
 
         /* Parse country_code */
         json_t* country_code = json_object_get(city_obj, "country_code");
         if (country_code && json_is_string(country_code)) {
             strncpy(city->country_code, json_string_value(country_code),
-                   sizeof(city->country_code) - 1);
+                    sizeof(city->country_code) - 1);
         }
 
         /* Parse latitude */
@@ -254,12 +261,13 @@ static int load_cities_from_json(const char* filepath, PopularCity** cities,
     json_decref(root);
 
     *cities = city_list;
-    *count = num_cities;
+    *count  = num_cities;
 
     return 0;
 }
 
-static void normalize_query(const char* input, char* output, size_t output_size) {
+static void normalize_query(const char* input, char* output,
+                            size_t output_size) {
     if (!input || !output || output_size == 0) {
         return;
     }

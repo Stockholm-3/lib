@@ -1,5 +1,6 @@
 #include "jansson_private.h"
 #include "strbuffer.h"
+
 #include <assert.h>
 #include <errno.h>
 #include <math.h>
@@ -8,11 +9,11 @@
 
 /* need jansson_private_config.h to get the correct snprintf */
 #ifdef HAVE_CONFIG_H
-#include <jansson_private_config.h>
+#    include <jansson_private_config.h>
 #endif
 
 #if JSON_HAVE_LOCALECONV
-#include <locale.h>
+#    include <locale.h>
 
 /*
   - This code assumes that the decimal separator is exactly one
@@ -24,9 +25,9 @@
     this way. Multi-threaded programs should use uselocale() instead.
 */
 
-static void to_locale(strbuffer_t *strbuffer) {
-    const char *point;
-    char *pos;
+static void to_locale(strbuffer_t* strbuffer) {
+    const char* point;
+    char*       pos;
 
     point = localeconv()->decimal_point;
     if (*point == '.') {
@@ -39,9 +40,9 @@ static void to_locale(strbuffer_t *strbuffer) {
         *pos = *point;
 }
 
-static void from_locale(char *buffer) {
-    const char *point;
-    char *pos;
+static void from_locale(char* buffer) {
+    const char* point;
+    char*       pos;
 
     point = localeconv()->decimal_point;
     if (*point == '.') {
@@ -55,9 +56,9 @@ static void from_locale(char *buffer) {
 }
 #endif
 
-int jsonp_strtod(strbuffer_t *strbuffer, double *out) {
+int jsonp_strtod(strbuffer_t* strbuffer, double* out) {
     double value;
-    char *end;
+    char*  end;
 
 #if JSON_HAVE_LOCALECONV
     to_locale(strbuffer);
@@ -76,9 +77,9 @@ int jsonp_strtod(strbuffer_t *strbuffer, double *out) {
     return 0;
 }
 
-int jsonp_dtostr(char *buffer, size_t size, double value, int precision) {
-    int ret;
-    char *start, *end;
+int jsonp_dtostr(char* buffer, size_t size, double value, int precision) {
+    int    ret;
+    char * start, *end;
     size_t length;
 
     if (precision == 0)
@@ -103,7 +104,7 @@ int jsonp_dtostr(char *buffer, size_t size, double value, int precision) {
             /* No space to append ".0" */
             return -1;
         }
-        buffer[length] = '.';
+        buffer[length]     = '.';
         buffer[length + 1] = '0';
         buffer[length + 2] = '\0';
         length += 2;

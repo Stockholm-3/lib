@@ -93,7 +93,7 @@ int weather_server_instance_on_request(void* context) {
             "(autocomplete)</li>"
             "</ul>"
             "<p>Source code available on <a "
-            "href=\"https://github.com/Stockholm-3/just-weather\" "
+            "href=\"https://github.com/Stockholm-3/just-weather-server\" "
             "target=\"_blank\">GitHub</a>.</p>"
             "</body>"
             "</html>";

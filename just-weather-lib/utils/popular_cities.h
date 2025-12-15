@@ -14,23 +14,23 @@
 
 /* City data structure */
 typedef struct {
-    char name[128];
-    char country[64];
-    char country_code[8];
+    char   name[128];
+    char   country[64];
+    char   country_code[8];
     double latitude;
     double longitude;
-    int population;
+    int    population;
 } PopularCity;
 
 /* Database structure with dual-file support */
 typedef struct {
-    PopularCity* hot_cities;    /* Loaded in RAM at startup */
-    size_t hot_count;
+    PopularCity* hot_cities; /* Loaded in RAM at startup */
+    size_t       hot_count;
 
-    char* full_db_path;         /* Path to all_cities.json */
-    PopularCity* full_cities;   /* NULL until lazy-loaded */
-    size_t full_count;
-    bool full_loaded;
+    char*        full_db_path; /* Path to all_cities.json */
+    PopularCity* full_cities;  /* NULL until lazy-loaded */
+    size_t       full_count;
+    bool         full_loaded;
 } PopularCitiesDB;
 
 /**
@@ -42,7 +42,7 @@ typedef struct {
  * @return 0 on success, negative on error
  */
 int popular_cities_load(const char* hot_file, const char* full_file,
-                       PopularCitiesDB** db);
+                        PopularCitiesDB** db);
 
 /**
  * Search for cities by name prefix
@@ -55,8 +55,8 @@ int popular_cities_load(const char* hot_file, const char* full_file,
  * @return 0 on success, negative on error
  */
 int popular_cities_search(PopularCitiesDB* db, const char* query,
-                         PopularCity** results, size_t* count,
-                         size_t max_results);
+                          PopularCity** results, size_t* count,
+                          size_t max_results);
 
 /**
  * Free database resources

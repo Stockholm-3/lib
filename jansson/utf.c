@@ -6,29 +6,30 @@
  */
 
 #include "utf.h"
+
 #include <string.h>
 
-int utf8_encode(int32_t codepoint, char *buffer, size_t *size) {
+int utf8_encode(int32_t codepoint, char* buffer, size_t* size) {
     if (codepoint < 0)
         return -1;
     else if (codepoint < 0x80) {
         buffer[0] = (char)codepoint;
-        *size = 1;
+        *size     = 1;
     } else if (codepoint < 0x800) {
         buffer[0] = 0xC0 + ((codepoint & 0x7C0) >> 6);
         buffer[1] = 0x80 + ((codepoint & 0x03F));
-        *size = 2;
+        *size     = 2;
     } else if (codepoint < 0x10000) {
         buffer[0] = 0xE0 + ((codepoint & 0xF000) >> 12);
         buffer[1] = 0x80 + ((codepoint & 0x0FC0) >> 6);
         buffer[2] = 0x80 + ((codepoint & 0x003F));
-        *size = 3;
+        *size     = 3;
     } else if (codepoint <= 0x10FFFF) {
         buffer[0] = 0xF0 + ((codepoint & 0x1C0000) >> 18);
         buffer[1] = 0x80 + ((codepoint & 0x03F000) >> 12);
         buffer[2] = 0x80 + ((codepoint & 0x000FC0) >> 6);
         buffer[3] = 0x80 + ((codepoint & 0x00003F));
-        *size = 4;
+        *size     = 4;
     } else
         return -1;
 
@@ -66,10 +67,10 @@ size_t utf8_check_first(char byte) {
     }
 }
 
-size_t utf8_check_full(const char *buffer, size_t size, int32_t *codepoint) {
-    size_t i;
-    int32_t value = 0;
-    unsigned char u = (unsigned char)buffer[0];
+size_t utf8_check_full(const char* buffer, size_t size, int32_t* codepoint) {
+    size_t        i;
+    int32_t       value = 0;
+    unsigned char u     = (unsigned char)buffer[0];
 
     if (size == 2) {
         value = u & 0x1F;
@@ -113,8 +114,9 @@ size_t utf8_check_full(const char *buffer, size_t size, int32_t *codepoint) {
     return 1;
 }
 
-const char *utf8_iterate(const char *buffer, size_t bufsize, int32_t *codepoint) {
-    size_t count;
+const char* utf8_iterate(const char* buffer, size_t bufsize,
+                         int32_t* codepoint) {
+    size_t  count;
     int32_t value;
 
     if (!bufsize)
@@ -137,7 +139,7 @@ const char *utf8_iterate(const char *buffer, size_t bufsize, int32_t *codepoint)
     return buffer + count;
 }
 
-int utf8_check_string(const char *string, size_t length) {
+int utf8_check_string(const char* string, size_t length) {
     size_t i;
 
     for (i = 0; i < length; i++) {

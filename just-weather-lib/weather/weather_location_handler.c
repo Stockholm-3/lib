@@ -16,7 +16,7 @@
 #include <string.h>
 
 /* Global state for lazy initialization */
-static bool             g_initialized        = false;
+static bool             g_initialized       = false;
 static PopularCitiesDB* s_popular_cities_db = NULL;
 
 /* External reference to geocoding API's global popular cities DB pointer */
@@ -58,9 +58,9 @@ static int ensure_initialized(void) {
     }
 
     /* Load popular cities database */
-    int cities_result = popular_cities_load(
-        "./data/hot_cities.json", "./data/all_cities.json",
-        &s_popular_cities_db);
+    int cities_result =
+        popular_cities_load("./data/hot_cities.json", "./data/all_cities.json",
+                            &s_popular_cities_db);
 
     if (cities_result != 0) {
         fprintf(stderr,
@@ -324,7 +324,7 @@ int weather_location_handler_search_cities(const char* query_string,
      * 3. Open-Meteo API (slow, uses quota)
      */
     GeocodingResponse* response = NULL;
-    int                result   = geocoding_api_search_smart(decoded_query, &response);
+    int result = geocoding_api_search_smart(decoded_query, &response);
 
     if (result != 0 || !response) {
         *response_json = response_builder_error(
