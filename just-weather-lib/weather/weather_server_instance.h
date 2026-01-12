@@ -1,3 +1,20 @@
+/**
+ * @file weather_server_instance.h
+ * @brief Weather server instance management for HTTP connections.
+ *
+ * This module provides lifecycle management for individual weather server
+ * instances. Each WeatherServerInstance wraps an HTTPServerConnection and
+ * handles HTTP request processing for weather-related endpoints.
+ *
+ * The module supports both stack-allocated and heap-allocated instances,
+ * with corresponding initialization and cleanup functions for each allocation
+ * method.
+ *
+ * @note Instances must be properly initialized before use and disposed of
+ *       when no longer needed to prevent resource leaks.
+ *
+ * @see http_server_connection.h
+ */
 #ifndef WEATHER_SERVER_INSTANCE_H
 #define WEATHER_SERVER_INSTANCE_H
 

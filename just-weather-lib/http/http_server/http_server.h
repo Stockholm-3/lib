@@ -1,3 +1,26 @@
+/**
+ * @file http_server.h
+ * @brief HTTP server with callback-based connection handling.
+ *
+ * This module provides a high-level HTTP server built on top of a TCP server.
+ * It listens for incoming connections on port 10680 and creates an
+ * HTTPServerConnection instance for each accepted client.
+ *
+ * The server uses a callback pattern to notify the application when new
+ * HTTP connections are established, allowing custom request handling logic
+ * to be registered per connection.
+ *
+ * The module supports both stack-allocated and heap-allocated server instances,
+ * with corresponding initialization and cleanup functions for each allocation
+ * method.
+ *
+ * @note The server operates in conjunction with the scheduler task system
+ *       for asynchronous event processing.
+ *
+ * @see http_server_connection.h
+ * @see tcp_server.h
+ * @see smw.h
+ */
 
 #ifndef HTTP_SERVER_H
 #define HTTP_SERVER_H

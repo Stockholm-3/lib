@@ -1,3 +1,30 @@
+/**
+ * @file http_client.h
+ * @brief Asynchronous HTTP client implementation with state machine.
+ *
+ * This module provides a non-blocking HTTP client that executes requests
+ * through a scheduler-driven state machine. It supports HTTP GET requests
+ * with configurable timeouts and asynchronous callback-based responses.
+ *
+ * The client handles:
+ * - URL parsing (hostname, port, path)
+ * - TCP connection establishment
+ * - HTTP request construction and transmission
+ * - Response parsing (headers, status codes, body)
+ * - Chunked transfer encoding
+ * - Connection management
+ *
+ * Each client progresses through well-defined states from initialization
+ * to disposal, with all I/O operations performed asynchronously via the
+ * scheduler task system.
+ *
+ * @note Maximum URL length is configurable via http_client_max_url_length
+ *       (default: 1024 characters).
+ *
+ * @see tcp_client.h
+ * @see smw.h
+ */
+
 #ifndef HTTP_CLIENT_H
 #define HTTP_CLIENT_H
 
@@ -45,7 +72,7 @@ typedef struct {
     int connection_close; // Connection: close header present
 
     TCPClient*
-         tcp_conn; // Handle to TCP connection, är en tcp connection struct
+         tcp_conn;      // Handle to TCP connection, är en tcp connection struct
     char hostname[256]; // Parsed from URL
     char path[512];     // Parsed from URL
     char port[16];      // Parsed from URL

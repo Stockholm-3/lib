@@ -1,3 +1,33 @@
+/**
+ * @file tcp_server.h
+ * @brief Non-blocking TCP server with callback-based connection handling.
+ *
+ * This module provides a lightweight TCP server implementation that listens
+ * for incoming connections on a specified port and handles client connections
+ * through a user-provided callback function.
+ *
+ * The server operates in non-blocking mode and integrates with a scheduler
+ * task system to poll for incoming connections without blocking the main
+ * event loop. When a client connects, the server accepts the connection,
+ * configures it as non-blocking, and invokes the registered callback.
+ *
+ * Key features:
+ * - Non-blocking I/O for both listening and accepted sockets
+ * - Callback-based connection handling
+ * - Integration with scheduler for asynchronous operation
+ * - Support for up to MAX_CLIENTS (512) pending connections
+ * - Both stack and heap allocation patterns
+ *
+ * The accept callback receives the client file descriptor and a user-defined
+ * context pointer, allowing flexible integration with higher-level protocols
+ * (e.g., HTTP servers).
+ *
+ * @note All sockets created by this module are configured in non-blocking mode.
+ * @note The server binds to all available network interfaces (INADDR_ANY).
+ *
+ * @see smw.h
+ */
+
 #ifndef TCP_SERVER_H
 #define TCP_SERVER_H
 

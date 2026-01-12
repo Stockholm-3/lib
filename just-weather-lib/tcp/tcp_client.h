@@ -1,3 +1,32 @@
+/**
+ * @file tcp_client.h
+ * @brief Non-blocking TCP client for connecting to remote hosts.
+ *
+ * This module provides a lightweight TCP client implementation that supports
+ * non-blocking connection establishment and I/O operations. It wraps standard
+ * POSIX socket operations with a simplified interface suitable for event-driven
+ * or scheduler-based network programming.
+ *
+ * The client can be initialized with an existing socket descriptor (useful for
+ * server-accepted connections) or can establish new outbound connections to
+ * remote hosts using hostname and port strings.
+ *
+ * Key features:
+ * - Non-blocking connection establishment
+ * - Hostname resolution via getaddrinfo()
+ * - Support for both IPv4 and IPv6
+ * - Distinguishes between temporary unavailability and connection closure
+ * - SIGPIPE prevention on write operations
+ * - Simple, minimal API with explicit resource management
+ *
+ * All I/O operations are designed to work with non-blocking sockets and
+ * return appropriate values to support integration with event loops, poll(),
+ * select(), or scheduler task systems.
+ *
+ * @note Sockets created by this module are automatically configured in
+ *       non-blocking mode during connection establishment.
+ */
+
 #ifndef TCP_CLIENT_H
 #define TCP_CLIENT_H
 
@@ -47,7 +76,8 @@ int tcp_client_initiate(TCPClient* c, int fd);
  *
  * @return 0 on success, -1 on failure.
  *
- * @warning If @p c already has an open file descriptor, this function will fail.
+ * @warning If @p c already has an open file descriptor, this function will
+ * fail.
  *
  * @note The connection may not be fully established when this function returns.
  *       The caller should use poll(), select(), or similar mechanisms to detect
@@ -70,8 +100,8 @@ int tcp_client_connect(TCPClient* c, const char* host, const char* port);
  *
  * @return The number of bytes sent on success, or -1 on error.
  *
- * @note In non-blocking mode, this function may send fewer bytes than requested.
- *       The caller should handle partial writes.
+ * @note In non-blocking mode, this function may send fewer bytes than
+ * requested. The caller should handle partial writes.
  */
 int tcp_client_write(TCPClient* c, const uint8_t* buf, size_t len);
 
@@ -106,7 +136,8 @@ int tcp_client_read(TCPClient* c, uint8_t* buf, size_t len);
  *
  * @param c Pointer to the TCPClient to disconnect.
  *
- * @note This function is safe to call even if the client is already disconnected.
+ * @note This function is safe to call even if the client is already
+ * disconnected.
  */
 void tcp_client_disconnect(TCPClient* c);
 
