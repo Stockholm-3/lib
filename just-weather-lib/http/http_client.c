@@ -10,10 +10,34 @@
 #define CHUNK_SIZE 4096
 #define PORTSIZE 100
 
-/* Decode HTTP chunked transfer encoding.
- * Returns 0 on success, non-zero on failure.
- * Allocates *out which must be freed by caller.
+//---------------Internal functions----------------
+
+static int decode_chunked(const uint8_t* in, size_t in_len, char** out,
+                          size_t* out_len);
+int  parse_url(const char* url, char* hostname, char* port_str, char* path);
+
+//----------------------------------------------------
+
+/**
+ * @brief Decode HTTP chunked transfer encoding.
+ *
+ * This function decodes a buffer encoded using HTTP/1.1
+ * "Transfer-Encoding: chunked" format and produces a
+ * contiguous decoded body.
+ *
+ * Memory for the decoded output is dynamically allocated
+ * and must be freed by the caller.
+ *
+ * @param in       Pointer to the chunked-encoded input buffer.
+ * @param in_len  Size of the input buffer in bytes.
+ * @param out     Output pointer that will receive the allocated decoded data.
+ * @param out_len Output length of the decoded data.
+ *
+ * @return 0 on success, non-zero on failure.
+ *
+ * @note The output buffer is always null-terminated for convenience.
  */
+
 static int decode_chunked(const uint8_t* in, size_t in_len, char** out,
                           size_t* out_len) {
     if (!in || !out || !out_len) {
@@ -122,14 +146,6 @@ static int decode_chunked(const uint8_t* in, size_t in_len, char** out,
     *out_len = buf_len;
     return 0;
 }
-
-//---------------Internal functions----------------
-
-void http_client_work(void* context, uint64_t mon_time);
-void http_client_dispose(HttpClient** client_ptr);
-int  parse_url(const char* url, char* hostname, char* port_str, char* path);
-
-//----------------------------------------------------
 
 int http_client_init(const char* u_rl, HttpClient** client_ptr,
                      const char* port) {
@@ -663,6 +679,25 @@ void http_client_dispose(HttpClient** client_ptr) {
     *(client_ptr) = NULL;
 }
 
+/**
+ * @brief Parse an HTTP or HTTPS URL.
+ *
+ * Extracts:
+ *   - Hostname
+ *   - Port (explicit or inferred)
+ *   - Path
+ *
+ * Examples:
+ *   - http://example.com → host=example.com, port=80, path=/
+ *   - https://example.com:8443/api → host=example.com, port=8443, path=/api
+ *
+ * @param url      Input URL.
+ * @param hostname Output buffer for hostname.
+ * @param port     Output buffer for port.
+ * @param path     Output buffer for path.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
 int parse_url(const char* url, char* hostname, char* port, char* path) {
     if (url == NULL || hostname == NULL || port == NULL || path == NULL) {
         return -1;

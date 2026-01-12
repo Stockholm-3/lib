@@ -19,8 +19,6 @@ typedef enum {
 
 } HttpClientState;
 
-// TODO:change to send response with heap instead of copyuting to
-// stack!!!!!!!!!!!!!!!!!!!
 typedef struct {
     HttpClientState state;
     SmwTask*        task;
@@ -54,15 +52,68 @@ typedef struct {
     char response[8192];
 } HttpClient;
 
-HttpClientState http_client_work_init(HttpClient* client);
-HttpClientState http_client_work_connect(HttpClient* client);
-HttpClientState http_client_work_writing(HttpClient* client);
-HttpClientState
-http_client_work_reading(HttpClient* client); // THIS WAS MISSING
-HttpClientState http_client_work_done(HttpClient* client);
+/**
+ * @brief Create and initialize an HTTP client instance.
+ *
+ * This function allocates a new HttpClient, initializes all fields,
+ * stores the URL, and registers a scheduler task to drive its
+ * internal state machine.
+ *
+ * @param u_rl       HTTP or HTTPS URL to request.
+ * @param client_ptr Output pointer that receives the allocated client.
+ * @param port       Optional explicit port override (may be NULL).
+ *
+ * @return
+ *   - 0 on success
+ *   - -1 if arguments are invalid
+ *   - -2 if URL is too long
+ *   - -3 if memory allocation fails
+ *
+ * @note The client is created in HTTP_CLIENT_STATE_INIT state.
+ */
 
+/**
+ * @brief Start an asynchronous HTTP GET request.
+ *
+ * This function creates a new HttpClient and schedules it to
+ * execute a GET request on the given URL.
+ *
+ * Results and errors are delivered via the provided callback.
+ *
+ * @param url       URL to fetch.
+ * @param timeout   Timeout in scheduler ticks.
+ * @param callback  Callback invoked on response, error, or timeout.
+ * @param port      Optional port override.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
 int http_client_get(const char* url, uint64_t timeout,
                     void (*callback)(const char* event, const char* response),
                     const char* port);
+
+/**
+ * @brief Scheduler-driven HTTP client state machine.
+ *
+ * This function is repeatedly called by the scheduler and
+ * advances the client through its lifecycle:
+ *
+ * INIT → CONNECT → CONNECTING → WRITING → READING → DONE → DISPOSE
+ *
+ * It also enforces the configured timeout.
+ *
+ * @param context  Pointer to HttpClient.
+ * @param mon_time Current scheduler time.
+ */
+void http_client_work(void* context, uint64_t mon_time);
+
+/**
+ * @brief Destroy an HTTP client and free all resources.
+ *
+ * Stops the scheduler task, releases memory, and invalidates
+ * the client pointer.
+ *
+ * @param client_ptr Pointer to HttpClient pointer.
+ */
+void http_client_dispose(HttpClient** client_ptr);
 
 #endif // http_client_h
