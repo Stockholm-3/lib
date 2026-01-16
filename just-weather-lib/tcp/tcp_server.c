@@ -99,18 +99,23 @@ void tcp_server_dispose_ptr(TCPServer** server_ptr) {
 /**
  * @brief Accept a pending client connection if one is available.
  *
- * This function attempts to accept a new client from the listening socket.
- * If no connection is currently pending, it returns without error.
+ * Attempts to accept a new client from the listening socket.
+ * The listening socket is expected to be non-blocking.
  *
- * When a client is accepted, the socket is placed into non-blocking mode and
- * passed to the server's accept callback.
+ * If no connection is currently pending (EAGAIN / EWOULDBLOCK),
+ * the function returns without error.
  *
- * If the callback returns a non-zero value, the socket is closed immediately.
+ * When a client is accepted, the client socket is placed into
+ * non-blocking mode and passed to the server's accept callback.
+ *
+ * If the accept callback returns a non-zero value, the client
+ * socket is closed immediately.
  *
  * @param server Pointer to the TCPServer.
  *
  * @return
- *   - 0 on success or if no client is waiting.
+ *   -  1 if a client was accepted.
+ *   -  0 if no client is waiting.
  *   - -1 on a fatal accept error.
  */
 int tcp_server_accept(TCPServer* server) {
