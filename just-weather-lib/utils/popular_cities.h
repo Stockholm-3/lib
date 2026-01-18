@@ -25,12 +25,12 @@ typedef struct {
 /* Database structure with dual-file support */
 typedef struct {
     PopularCity* hot_cities; /* Loaded in RAM at startup */
-    size_t       hot_count;
+    size_t       hot_count; /* Number of hot cities */
 
     char*        full_db_path; /* Path to all_cities.json */
     PopularCity* full_cities;  /* NULL until lazy-loaded */
-    size_t       full_count;
-    bool         full_loaded;
+    size_t       full_count; /* Number of cities in full database */
+    bool         full_loaded; /* Indicates if full DB is loaded */
 } PopularCitiesDB;
 
 /**
