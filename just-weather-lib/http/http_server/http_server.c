@@ -5,8 +5,8 @@
 
 //-----------------Internal Functions-----------------
 
-void http_server_task_work(void* context, uint64_t mon_time);
-int  http_server_on_accept(int fd, void* context);
+static void http_server_task_work(void* context, uint64_t mon_time);
+static int  http_server_on_accept(int fd, void* context);
 
 //----------------------------------------------------
 
@@ -44,6 +44,27 @@ int http_server_initiate_ptr(HttpServerOnConnection on_connection,
     return 0;
 }
 
+/**
+ * @brief Callback invoked when a TCP connection is accepted for the HTTP
+ * server.
+ *
+ * This function is called by the underlying TCP server when a new client
+ * connects. It wraps the raw socket file descriptor into an
+ * HTTPServerConnection structure and invokes the HTTP server's
+ * user-provided connection callback.
+ *
+ * @param fd      File descriptor of the newly accepted TCP connection.
+ * @param context Pointer to the HTTPServer instance (passed as void*).
+ *
+ * @return
+ *   - 0 on success (connection successfully wrapped and callback invoked).
+ *   - -1 on failure (e.g., if the HTTPServerConnection could not be initiated).
+ *
+ * @note The function prints an error message to stdout if initiating the
+ *       HTTPServerConnection fails.
+ * @note This function is typically registered as the onAccept callback
+ *       in the TCP server and is not called directly by user code.
+ */
 int http_server_on_accept(int fd, void* context) {
     HTTPServer* server = (HTTPServer*)context;
 
@@ -59,6 +80,7 @@ int http_server_on_accept(int fd, void* context) {
     return 0;
 }
 
+// This is not used yet
 void http_server_task_work(void* context, uint64_t mon_time) {
     // HTTPServer* _Server = (HTTPServer*)_Context;
 }
