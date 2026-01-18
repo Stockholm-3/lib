@@ -1,25 +1,84 @@
 /**
- * popular_cities.c - Implementation of popular cities database
+ * @file popular_cities.c
+ * @brief Implementation of a searchable popular cities database.
+ *
+ * This module provides functionality to load, search, and free a database
+ * of popular cities. It supports:
+ *
+ * - Immediate loading of a small "hot cities" dataset
+ * - Lazy loading of a full cities database on demand
+ * - Case-insensitive, prefix-based searching
+ *
+ * City data is loaded from JSON files using the Jansson library.
+ *
+ * @note This module is NOT thread-safe.
+ * @note Search results are pointers to internal storage and must NOT be freed
+ *       or modified by the caller.
  */
 
 #include "popular_cities.h"
 
-#include <ctype.h>
 #include <jansson.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 
 /* ============= Internal Functions ============= */
 
-static int  load_cities_from_json(const char* filepath, PopularCity** cities,
-                                  size_t* count);
+/**
+ * @brief Load city data from a JSON file.
+ *
+ * The JSON file must contain an object with a "cities" array.
+ * Each element of the array is expected to be a JSON object describing
+ * a city.
+ *
+ * Memory for the cities array is allocated internally and must be freed
+ * by the caller.
+ *
+ * @param filepath Path to the JSON file.
+ * @param cities   Output pointer that receives the allocated city array.
+ * @param count    Output parameter that receives the number of cities loaded.
+ *
+ * @return
+ *   - 0 on success
+ *   - Negative value on failure
+ */
+static int load_cities_from_json(const char* filepath, PopularCity** cities,
+                                 size_t* count);
+
+/**
+ * @brief Normalize a string for case-insensitive search comparison.
+ *
+ * Normalization rules:
+ * - Converts ASCII letters to lowercase
+ * - Keeps digits, spaces, dashes, and underscores
+ * - Discards all other characters
+ *
+ * @param input       Input string to normalize.
+ * @param output      Output buffer.
+ * @param output_size Size of the output buffer.
+ */
 static void normalize_query(const char* input, char* output,
                             size_t output_size);
 
 /* ============= Public API Implementation ============= */
 
+/**
+ * @brief Load the popular cities database.
+ *
+ * This function immediately loads the "hot cities" dataset and stores
+ * the path to the full database for lazy loading.
+ *
+ * The full database is only loaded if required by a search.
+ *
+ * @param hot_file  Path to the JSON file containing hot cities.
+ * @param full_file Path to the JSON file containing the full dataset.
+ * @param db        Output pointer that receives the database instance.
+ *
+ * @return
+ *   - 0 on success
+ *   - Negative value on failure
+ */
 int popular_cities_load(const char* hot_file, const char* full_file,
                         PopularCitiesDB** db) {
     if (!hot_file || !full_file || !db) {
@@ -35,7 +94,7 @@ int popular_cities_load(const char* hot_file, const char* full_file,
         return -2;
     }
 
-    /* Load hot cities (immediately) */
+    /* Load hot cities immediately */
     printf("[POPULAR_CITIES] Loading hot cities from: %s\n", hot_file);
 
     int result = load_cities_from_json(hot_file, &database->hot_cities,
@@ -49,7 +108,7 @@ int popular_cities_load(const char* hot_file, const char* full_file,
 
     printf("[POPULAR_CITIES] Loaded %zu hot cities\n", database->hot_count);
 
-    /* Save full database path for lazy loading */
+    /* Store full database path for lazy loading */
     database->full_db_path = strdup(full_file);
     database->full_cities  = NULL;
     database->full_count   = 0;
@@ -59,6 +118,27 @@ int popular_cities_load(const char* hot_file, const char* full_file,
     return 0;
 }
 
+/**
+ * @brief Search for cities matching a query string.
+ *
+ * The search is case-insensitive and performs prefix matching.
+ *
+ * Search order:
+ * 1. Hot cities
+ * 2. Full database (lazy loaded if needed)
+ *
+ * Returned city pointers reference internal storage and must not be freed.
+ *
+ * @param db          Pointer to the database.
+ * @param query       Search query string.
+ * @param results     Output array for matching city pointers.
+ * @param count       Output parameter receiving number of matches.
+ * @param max_results Maximum number of results to return.
+ *
+ * @return
+ *   - 0 on success
+ *   - -1 on invalid parameters or invalid query
+ */
 int popular_cities_search(PopularCitiesDB* db, const char* query,
                           PopularCity** results, size_t* count,
                           size_t max_results) {
@@ -78,7 +158,7 @@ int popular_cities_search(PopularCitiesDB* db, const char* query,
         return -1; /* Query too short */
     }
 
-    /* Search in hot cities first */
+    /* Search hot cities first */
     for (size_t i = 0; i < db->hot_count && *count < max_results; i++) {
         char normalized_city[128];
         normalize_query(db->hot_cities[i].name, normalized_city,
@@ -91,12 +171,12 @@ int popular_cities_search(PopularCitiesDB* db, const char* query,
         }
     }
 
-    /* If we found enough results in hot cities, return */
+    /* If matches were found, skip full database */
     if (*count > 0) {
         return 0;
     }
 
-    /* Lazy load full database if needed */
+    /* Lazy load full database if necessary */
     if (!db->full_loaded && db->full_db_path) {
         printf("[POPULAR_CITIES] Lazy loading full database from: %s\n",
                db->full_db_path);
@@ -111,18 +191,17 @@ int popular_cities_search(PopularCitiesDB* db, const char* query,
         } else {
             fprintf(stderr,
                     "[POPULAR_CITIES] Failed to lazy load full database\n");
-            return 0; /* Return empty results instead of error */
+            return 0;
         }
     }
 
-    /* Search in full database */
+    /* Search full database */
     if (db->full_loaded && db->full_cities) {
         for (size_t i = 0; i < db->full_count && *count < max_results; i++) {
             char normalized_city[128];
             normalize_query(db->full_cities[i].name, normalized_city,
                             sizeof(normalized_city));
 
-            /* Prefix match */
             if (strncmp(normalized_city, normalized_query, query_len) == 0) {
                 results[*count] = &db->full_cities[i];
                 (*count)++;
@@ -133,30 +212,31 @@ int popular_cities_search(PopularCitiesDB* db, const char* query,
     return 0;
 }
 
+/**
+ * @brief Free a popular cities database.
+ *
+ * Releases all memory associated with the database, including
+ * city arrays and internal strings.
+ *
+ * @param db Pointer to the database to free.
+ */
 void popular_cities_free(PopularCitiesDB* db) {
     if (!db) {
         return;
     }
 
-    /* Free hot cities */
     if (db->hot_cities) {
         free(db->hot_cities);
-        db->hot_cities = NULL;
     }
 
-    /* Free full cities */
     if (db->full_cities) {
         free(db->full_cities);
-        db->full_cities = NULL;
     }
 
-    /* Free full database path */
     if (db->full_db_path) {
         free(db->full_db_path);
-        db->full_db_path = NULL;
     }
 
-    /* Free database structure */
     free(db);
 
     printf("[POPULAR_CITIES] Database freed\n");
@@ -164,28 +244,38 @@ void popular_cities_free(PopularCitiesDB* db) {
 
 /* ============= Internal Functions Implementation ============= */
 
+/**
+ * @brief Load city data from a JSON file.
+ *
+ * Expects a JSON object containing a "cities" array.
+ *
+ * @param filepath Path to the JSON file.
+ * @param cities   Output pointer for allocated city array.
+ * @param count    Output parameter for number of cities.
+ *
+ * @return
+ *   - 0 on success
+ *   - Negative value on failure
+ */
 static int load_cities_from_json(const char* filepath, PopularCity** cities,
                                  size_t* count) {
     if (!filepath || !cities || !count) {
         return -1;
     }
 
-    /* Load JSON file */
     json_error_t error;
-    json_t*      root = json_load_file(filepath, 0, &error);
+    json_t* root = json_load_file(filepath, 0, &error);
 
     if (!root) {
         fprintf(stderr, "[POPULAR_CITIES] JSON load error: %s\n", error.text);
         return -2;
     }
 
-    /* Get cities array */
     json_t* cities_array = json_object_get(root, "cities");
 
     if (!cities_array || !json_is_array(cities_array)) {
-        fprintf(
-            stderr,
-            "[POPULAR_CITIES] Invalid JSON format: missing 'cities' array\n");
+        fprintf(stderr,
+                "[POPULAR_CITIES] Invalid JSON format: missing 'cities' array\n");
         json_decref(root);
         return -3;
     }
@@ -198,7 +288,6 @@ static int load_cities_from_json(const char* filepath, PopularCity** cities,
         return -4;
     }
 
-    /* Allocate cities array */
     PopularCity* city_list =
         (PopularCity*)calloc(num_cities, sizeof(PopularCity));
 
@@ -208,52 +297,44 @@ static int load_cities_from_json(const char* filepath, PopularCity** cities,
         return -5;
     }
 
-    /* Parse each city */
     for (size_t i = 0; i < num_cities; i++) {
         json_t* city_obj = json_array_get(cities_array, i);
-
         if (!json_is_object(city_obj)) {
             continue;
         }
 
         PopularCity* city = &city_list[i];
 
-        /* Parse name */
         json_t* name = json_object_get(city_obj, "name");
-        if (name && json_is_string(name)) {
+        if (json_is_string(name)) {
             strncpy(city->name, json_string_value(name),
                     sizeof(city->name) - 1);
         }
 
-        /* Parse country */
         json_t* country = json_object_get(city_obj, "country");
-        if (country && json_is_string(country)) {
+        if (json_is_string(country)) {
             strncpy(city->country, json_string_value(country),
                     sizeof(city->country) - 1);
         }
 
-        /* Parse country_code */
         json_t* country_code = json_object_get(city_obj, "country_code");
-        if (country_code && json_is_string(country_code)) {
+        if (json_is_string(country_code)) {
             strncpy(city->country_code, json_string_value(country_code),
                     sizeof(city->country_code) - 1);
         }
 
-        /* Parse latitude */
         json_t* lat = json_object_get(city_obj, "lat");
-        if (lat && json_is_number(lat)) {
+        if (json_is_number(lat)) {
             city->latitude = json_number_value(lat);
         }
 
-        /* Parse longitude */
         json_t* lon = json_object_get(city_obj, "lon");
-        if (lon && json_is_number(lon)) {
+        if (json_is_number(lon)) {
             city->longitude = json_number_value(lon);
         }
 
-        /* Parse population */
         json_t* population = json_object_get(city_obj, "population");
-        if (population && json_is_integer(population)) {
+        if (json_is_integer(population)) {
             city->population = json_integer_value(population);
         }
     }
@@ -266,6 +347,15 @@ static int load_cities_from_json(const char* filepath, PopularCity** cities,
     return 0;
 }
 
+/**
+ * @brief Normalize a string for search comparison.
+ *
+ * Converts ASCII letters to lowercase and removes unsupported characters.
+ *
+ * @param input       Input string.
+ * @param output      Output buffer.
+ * @param output_size Size of the output buffer.
+ */
 static void normalize_query(const char* input, char* output,
                             size_t output_size) {
     if (!input || !output || output_size == 0) {
@@ -277,7 +367,6 @@ static void normalize_query(const char* input, char* output,
     for (size_t i = 0; input[i] != '\0' && j + 1 < output_size; i++) {
         unsigned char c = (unsigned char)input[i];
 
-        /* Convert to lowercase (ASCII only) */
         if (c >= 'A' && c <= 'Z') {
             output[j++] = (char)(c - 'A' + 'a');
         } else if (c >= 'a' && c <= 'z') {
@@ -285,10 +374,8 @@ static void normalize_query(const char* input, char* output,
         } else if (c >= '0' && c <= '9') {
             output[j++] = (char)c;
         } else if (c == ' ' || c == '-' || c == '_') {
-            /* Keep spaces and dashes */
             output[j++] = (char)c;
         }
-        /* Skip other characters */
     }
 
     output[j] = '\0';
