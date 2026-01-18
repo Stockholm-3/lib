@@ -1,5 +1,11 @@
 /**
- * weather_location_handler.c - Implementation of the combined handler
+ * @file weather_location_handler.c
+ * @brief Implementation of the combined geocoding and weather handler.
+ *
+ * This file implements the weather location handler which provides
+ * city-based weather lookups and city search functionality.
+ *
+ * @see weather_location_handler.h for the public interface
  */
 
 #include "weather_location_handler.h"
@@ -15,14 +21,28 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Global state for lazy initialization */
-static bool             g_initialized       = false;
+/**
+ * @brief Global flag indicating whether the module has been initialized.
+ * @internal
+ */
+static bool g_initialized = false;
+
+/**
+ * @brief Pointer to the popular cities database for fast lookups.
+ * @internal
+ */
 static PopularCitiesDB* s_popular_cities_db = NULL;
 
-/* External reference to geocoding API's global popular cities DB pointer */
+/**
+ * @brief External reference to geocoding API's global popular cities DB
+ * pointer.
+ * @internal
+ *
+ * This allows the geocoding module to use our loaded database.
+ */
 extern void* g_popular_cities_db;
 
-/* Internal functions */
+/* Forward declarations for internal functions */
 static void url_decode(const char* src, char* dst, size_t dst_size);
 static int  parse_city_query(const char* query, char* city, size_t city_size,
                              char* country, size_t country_size, char* region,
@@ -31,6 +51,15 @@ static int  ensure_initialized(void);
 
 /* ============= Lazy Initialization ============= */
 
+/**
+ * @brief Ensure all dependent modules are initialized.
+ * @internal
+ *
+ * Performs lazy initialization of weather API, geocoding API,
+ * and popular cities database. Safe to call multiple times.
+ *
+ * @return 0 on success, -1 on failure.
+ */
 static int ensure_initialized(void) {
     if (g_initialized) {
         return 0; /* Already initialized */
@@ -81,11 +110,25 @@ static int ensure_initialized(void) {
 
 /* ============= Public API ============= */
 
+/**
+ * @brief Initialize the weather location handler explicitly.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
 int weather_location_handler_init(void) {
     /* Explicit initialization (optional) */
     return ensure_initialized();
 }
 
+/**
+ * @brief Handle weather request by city name.
+ *
+ * @param[in]  query_string  URL query parameters.
+ * @param[out] response_json Allocated JSON response (caller frees).
+ * @param[out] status_code   HTTP status code.
+ *
+ * @return 0 on success, -1 on error.
+ */
 int weather_location_handler_by_city(const char* query_string,
                                      char** response_json, int* status_code) {
     if (!response_json || !status_code) {
@@ -274,6 +317,15 @@ int weather_location_handler_by_city(const char* query_string,
     return 0;
 }
 
+/**
+ * @brief Handle city search request for autocomplete.
+ *
+ * @param[in]  query_string  URL query parameters with search query.
+ * @param[out] response_json Allocated JSON response (caller frees).
+ * @param[out] status_code   HTTP status code.
+ *
+ * @return 0 on success, -1 on error.
+ */
 int weather_location_handler_search_cities(const char* query_string,
                                            char**      response_json,
                                            int*        status_code) {
@@ -382,6 +434,9 @@ int weather_location_handler_search_cities(const char* query_string,
     return 0;
 }
 
+/**
+ * @brief Clean up the weather location handler and all dependencies.
+ */
 void weather_location_handler_cleanup(void) {
     if (!g_initialized) {
         return;
@@ -403,7 +458,17 @@ void weather_location_handler_cleanup(void) {
 
 /* ============= Internal Functions ============= */
 
-/* URL decode helper: converts %XX to characters, + and _ to space */
+/**
+ * @brief Decode URL-encoded string.
+ * @internal
+ *
+ * Converts %XX sequences to their character equivalents.
+ * Also converts '+' and '_' to spaces for query parameter compatibility.
+ *
+ * @param[in]  src      Source URL-encoded string.
+ * @param[out] dst      Destination buffer for decoded string.
+ * @param[in]  dst_size Size of destination buffer.
+ */
 static void url_decode(const char* src, char* dst, size_t dst_size) {
     if (!src || !dst || dst_size == 0) {
         return;
@@ -431,6 +496,23 @@ static void url_decode(const char* src, char* dst, size_t dst_size) {
     dst[dst_pos] = '\0';
 }
 
+/**
+ * @brief Parse city query parameters from URL query string.
+ * @internal
+ *
+ * Extracts city, country, and region parameters from a query string.
+ * Parameters are URL-decoded during extraction.
+ *
+ * @param[in]  query        URL query string to parse.
+ * @param[out] city         Buffer to receive city name.
+ * @param[in]  city_size    Size of city buffer.
+ * @param[out] country      Buffer to receive country code.
+ * @param[in]  country_size Size of country buffer.
+ * @param[out] region       Buffer to receive region name.
+ * @param[in]  region_size  Size of region buffer.
+ *
+ * @return 0 if city parameter was found, -1 otherwise.
+ */
 static int parse_city_query(const char* query, char* city, size_t city_size,
                             char* country, size_t country_size, char* region,
                             size_t region_size) {

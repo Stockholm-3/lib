@@ -1,5 +1,13 @@
-/*  open_meteo_handler.c -  open_meteo_handler - endpoint handler for HTTP
- * server */
+/**
+ * @file open_meteo_handler.c
+ * @brief Implementation of HTTP endpoint handler for Open-Meteo weather API.
+ *
+ * This file implements the HTTP request handling logic for weather endpoints.
+ * It processes incoming requests, interacts with the Open-Meteo API client,
+ * and formats responses using the standardized response builder.
+ *
+ * @see open_meteo_handler.h for the public interface
+ */
 
 #include "open_meteo_handler.h"
 
@@ -9,9 +17,15 @@
 #include <jansson.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <time.h>
 
-/* Initialize weather server module */
+/**
+ * @brief Initialize the Open-Meteo handler module.
+ *
+ * Configures and initializes the Open-Meteo API client with caching enabled.
+ *
+ * @return 0 on success, non-zero on failure.
+ */
 int open_meteo_handler_init(void) {
     WeatherConfig config = {.cache_dir = "./cache/weather_cache",
                             .cache_ttl = 900, /* 15 minutes */
@@ -20,7 +34,18 @@ int open_meteo_handler_init(void) {
     return open_meteo_api_init(&config);
 }
 
-/* Handle GET /v1/current endpoint */
+/**
+ * @brief Handle GET /v1/current endpoint request.
+ *
+ * Parses latitude and longitude from query string, fetches current weather
+ * data from Open-Meteo API, and builds a JSON response with weather details.
+ *
+ * @param[in]  query_string  URL query parameters containing lat and lon.
+ * @param[out] response_json Allocated JSON response string (caller frees).
+ * @param[out] status_code   HTTP status code for the response.
+ *
+ * @return 0 on success, -1 on error.
+ */
 int open_meteo_handler_current(const char* query_string, char** response_json,
                                int* status_code) {
     if (!response_json || !status_code) {
@@ -122,5 +147,9 @@ int open_meteo_handler_current(const char* query_string, char** response_json,
     return 0;
 }
 
-/* Cleanup weather server module */
+/**
+ * @brief Clean up the Open-Meteo handler module.
+ *
+ * Releases all resources allocated by the underlying Open-Meteo API client.
+ */
 void open_meteo_handler_cleanup(void) { open_meteo_api_cleanup(); }

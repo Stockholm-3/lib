@@ -180,6 +180,20 @@ lint-ci:
 	else \
 		echo "✅ Lint passed"; \
 	fi
+# ------------------------------------------------------------
+# Documentation
+# ------------------------------------------------------------
+.PHONY: docs
+docs:
+	@echo "Generating documentation..."
+	@doxygen
+	@echo "Documentation generated in documentation/html/index.html"
+
+.PHONY: clean-docs
+clean-docs:
+	@echo "Removing documentation..."
+	@rm -rf documentation
+	@echo "Documentation removed."
 
 .PHONY: install-lib
 install-lib:

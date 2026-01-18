@@ -56,7 +56,7 @@ SmwTask* smw_create_task(void* context,
  *
  * @param task Pointer to the SmwTask to remove.
  */
-void     smw_destroy_task(SmwTask* task);
+void smw_destroy_task(SmwTask* task);
 
 /**
  * @brief Execute all registered tasks.

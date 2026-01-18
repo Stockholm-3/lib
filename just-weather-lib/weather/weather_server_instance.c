@@ -1,20 +1,49 @@
+/**
+ * @file weather_server_instance.c
+ * @brief Implementation of weather server instance and HTTP request routing.
+ *
+ * This file implements the WeatherServerInstance lifecycle management and
+ * the HTTP request handler that routes requests to appropriate endpoint
+ * handlers based on the URL path.
+ *
+ * @see weather_server_instance.h for the public interface
+ */
+
 #include "weather_server_instance.h"
 
 #include "open_meteo_handler.h"
 #include "response_builder.h"
 #include "weather_location_handler.h"
 
-#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-//-----------------Internal Functions-----------------
+/* ============= Internal Function Declarations ============= */
 
+/**
+ * @brief HTTP request callback handler.
+ * @internal
+ *
+ * Routes incoming HTTP requests to the appropriate endpoint handler
+ * based on the request method and path.
+ *
+ * @param[in] context WeatherServerInstance pointer cast to void*.
+ *
+ * @return 0 on success, -1 on fatal error.
+ */
 int weather_server_instance_on_request(void* context);
 
-//----------------------------------------------------
+/* ============= Public API Implementation ============= */
 
+/**
+ * @brief Initialize a WeatherServerInstance.
+ *
+ * @param[in,out] instance   Instance to initialize.
+ * @param[in]     connection HTTP connection to associate.
+ *
+ * @return 0 on success.
+ */
 int weather_server_instance_initiate(WeatherServerInstance* instance,
                                      HTTPServerConnection*  connection) {
     instance->connection = connection;
@@ -25,6 +54,14 @@ int weather_server_instance_initiate(WeatherServerInstance* instance,
     return 0;
 }
 
+/**
+ * @brief Allocate and initialize a WeatherServerInstance.
+ *
+ * @param[in]  connection   HTTP connection to handle.
+ * @param[out] instance_ptr Pointer to receive the allocated instance.
+ *
+ * @return 0 on success, -1 if instance_ptr is NULL, -2 if allocation fails.
+ */
 int weather_server_instance_initiate_ptr(HTTPServerConnection*   connection,
                                          WeatherServerInstance** instance_ptr) {
     if (instance_ptr == NULL) {
@@ -48,6 +85,25 @@ int weather_server_instance_initiate_ptr(HTTPServerConnection*   connection,
     return 0;
 }
 
+/* ============= HTTP Request Handler ============= */
+
+/**
+ * @brief Route and handle HTTP requests for weather API endpoints.
+ * @internal
+ *
+ * Parses the request URL, extracts path and query components, and
+ * routes to the appropriate handler:
+ * - GET / -> Homepage with API documentation
+ * - /echo -> Echo request/body for debugging
+ * - GET /v1/weather -> Weather by city name
+ * - GET /v1/cities -> City search
+ * - GET /v1/current -> Weather by coordinates
+ * - Other -> 404 Not Found
+ *
+ * @param[in] context WeatherServerInstance pointer.
+ *
+ * @return 0 on success, -1 on fatal error.
+ */
 int weather_server_instance_on_request(void* context) {
     WeatherServerInstance* inst = (WeatherServerInstance*)context;
     HTTPServerConnection*  conn = inst->connection;
@@ -417,11 +473,33 @@ int weather_server_instance_on_request(void* context) {
     return 0;
 }
 
+/* ============= Lifecycle Functions ============= */
+
+/**
+ * @brief Periodic work function (currently no-op).
+ *
+ * @param[in] instance Instance to process.
+ * @param[in] mon_time Current scheduler time.
+ */
 void weather_server_instance_work(WeatherServerInstance* instance,
-                                  uint64_t               mon_time) {}
+                                  uint64_t               mon_time) {
+    /* Reserved for future timeout/cleanup logic */
+}
 
-void weather_server_instance_dispose(WeatherServerInstance* instance) {}
+/**
+ * @brief Dispose of a stack-allocated instance (currently no-op).
+ *
+ * @param[in] instance Instance to dispose.
+ */
+void weather_server_instance_dispose(WeatherServerInstance* instance) {
+    /* Reserved for future cleanup logic */
+}
 
+/**
+ * @brief Dispose and free a dynamically allocated instance.
+ *
+ * @param[in,out] instance_ptr Pointer to instance pointer (set to NULL).
+ */
 void weather_server_instance_dispose_ptr(WeatherServerInstance** instance_ptr) {
     if (instance_ptr == NULL || *(instance_ptr) == NULL) {
         return;

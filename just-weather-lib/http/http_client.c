@@ -14,7 +14,7 @@
 
 static int decode_chunked(const uint8_t* in, size_t in_len, char** out,
                           size_t* out_len);
-int  parse_url(const char* url, char* hostname, char* port_str, char* path);
+int parse_url(const char* url, char* hostname, char* port_str, char* path);
 
 //----------------------------------------------------
 
