@@ -1,5 +1,6 @@
 #include "http_server_connection.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -7,12 +8,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Maximum size for header buffer to prevent memory exhaustion attacks
+#define MAX_HEADER_SIZE 8192
+
+// Maximum size for request body to prevent memory exhaustion attacks
+#define MAX_BODY_SIZE (10 * 1024 * 1024) // 10MB
+
 //-----------------Internal Functions-----------------
 
 void http_server_connection_task_work(void* context, uint64_t mon_time);
 
+static int  http_server_connection_send(HTTPServerConnection* connection);
 static int  read_chunk_into_buffer(HTTPServerConnection* connection);
 static int  parse_http_headers(HTTPServerConnection* connection);
+static int  validate_http_method(const char* method);
+static int  validate_request_path(const char* path);
 static int  extract_request_body(HTTPServerConnection* connection);
 static void transition_to_send_state(HTTPServerConnection* connection);
 
@@ -70,46 +80,17 @@ void http_server_connection_set_callback(
     connection->onRequest = on_request;
 }
 
-int http_server_connection_send(HTTPServerConnection* connection) {
-    if (!connection || !connection->write_buffer ||
-        connection->write_offset >= connection->write_size) {
-        return 0;
-    }
-
-    ssize_t sent =
-        tcp_client_write(&connection->tcpClient,
-                         connection->write_buffer + connection->write_offset,
-                         connection->write_size - connection->write_offset);
-
-    if (sent > 0) {
-        connection->write_offset += sent;
-    } else if (sent < 0) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            connection->state = HTTP_SERVER_CONNECTION_STATE_DISPOSE;
-            return -1;
-        }
-    }
-
-    // Finished sending
-    if (connection->write_offset >= connection->write_size) {
-        connection->state = HTTP_SERVER_CONNECTION_STATE_DISPOSE;
-    }
-
-    return 0;
-}
-
-//-------- Helper Functions --------
-
 /**
  * @brief Read a chunk of data from TCP socket into the connection's read buffer
  *
  * Reads up to CHUNK_SIZE bytes from the TCP socket and appends it to the
  * connection's internal read buffer. The buffer is automatically expanded
- * using realloc if needed.
+ * using realloc if needed. Enforces MAX_HEADER_SIZE limit to prevent memory
+ * exhaustion attacks.
  *
  * @param connection Pointer to the HTTP server connection
  * @return int Number of bytes read on success, 0 if no data available
- *         (EAGAIN/EWOULDBLOCK), -1 on error
+ *         (EAGAIN/EWOULDBLOCK), -1 on error, -2 if size limit exceeded
  */
 static int read_chunk_into_buffer(HTTPServerConnection* connection) {
     uint8_t chunk_buffer[CHUNK_SIZE];
@@ -123,8 +104,18 @@ static int read_chunk_into_buffer(HTTPServerConnection* connection) {
         return 0; // No data available (EAGAIN/EWOULDBLOCK)
     }
 
+    size_t new_size = connection->read_buffer_size + bytes_read;
+
+    // Check size limits based on current state
+    size_t max_size = (connection->body_start > 0)
+                          ? (connection->body_start + MAX_BODY_SIZE)
+                          : MAX_HEADER_SIZE;
+
+    if (new_size > max_size) {
+        return -2; // Size limit exceeded
+    }
+
     // Expand the read buffer
-    size_t   new_size   = connection->read_buffer_size + bytes_read;
     uint8_t* new_buffer = realloc(connection->read_buffer, new_size);
     if (!new_buffer) {
         return -1;
@@ -139,10 +130,60 @@ static int read_chunk_into_buffer(HTTPServerConnection* connection) {
 }
 
 /**
+ * @brief Validate HTTP method string
+ *
+ * Checks if the method is a recognized HTTP method and contains only
+ * uppercase letters.
+ *
+ * @param method HTTP method string to validate
+ * @return int 1 if valid, 0 if invalid
+ */
+static int validate_http_method(const char* method) {
+    if (!method || method[0] == '\0') {
+        return 0;
+    }
+
+    // Common HTTP methods
+    const char* valid_methods[] = {"GET",    "POST",    "PUT",
+                                   "DELETE", "HEAD",    "OPTIONS",
+                                   "PATCH",  "CONNECT", "TRACE"};
+
+    for (size_t i = 0; i < sizeof(valid_methods) / sizeof(valid_methods[0]);
+         i++) {
+        if (strcmp(method, valid_methods[i]) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Validate HTTP request path
+ *
+ * Checks if the path is non-empty and starts with '/' or is '*' (for OPTIONS).
+ *
+ * @param path Request path to validate
+ * @return int 1 if valid, 0 if invalid
+ */
+static int validate_request_path(const char* path) {
+    if (!path || path[0] == '\0') {
+        return 0;
+    }
+
+    // Path must start with '/' or be '*'
+    if (path[0] == '/' || strcmp(path, "*") == 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
  * @brief Parse HTTP headers from the connection's read buffer
  *
  * Searches for the HTTP headers end marker (\\r\\n\\r\\n) and extracts the
- * request line and headers. Parses:
+ * request line and headers. Parses and validates:
  * - HTTP method (GET, POST, etc.)
  * - Request path/URI
  * - Host header
@@ -152,8 +193,8 @@ static int read_chunk_into_buffer(HTTPServerConnection* connection) {
  * allocated strings that must be freed later.
  *
  * @param connection Pointer to the HTTP server connection
- * @return int 1 if headers fully parsed, 0 if incomplete (need more data),
- *         -1 on error (memory allocation failure)
+ * @return int 1 if headers fully parsed and valid, 0 if incomplete (need more
+ *         data), -1 on error (memory allocation failure or malformed request)
  */
 static int parse_http_headers(HTTPServerConnection* connection) {
     // Search for end of headers marker: \r\n\r\n
@@ -165,6 +206,7 @@ static int parse_http_headers(HTTPServerConnection* connection) {
 
             char   method[METHOD_MAX_LEN]             = {0};
             char   request_path[REQUEST_PATH_MAX_LEN] = {0};
+            char   version[16]                        = {0};
             char   host[HOST_MAX_LEN]                 = {0};
             size_t content_len                        = 0;
 
@@ -177,8 +219,35 @@ static int parse_http_headers(HTTPServerConnection* connection) {
             memcpy(headers, connection->read_buffer, header_end);
             headers[header_end] = '\0';
 
-            // Parse request line (method and path)
-            sscanf(headers, "%7s %255s", method, request_path);
+            // Parse request line (method, path, and version)
+            int parsed = sscanf(headers, "%7s %255s %15s", method, request_path,
+                                version);
+
+            // Must have at least method and path
+            if (parsed < 2) {
+                free(headers);
+                return -1; // Malformed request line
+            }
+
+            // Validate method
+            if (!validate_http_method(method)) {
+                free(headers);
+                return -1; // Invalid HTTP method
+            }
+
+            // Validate request path
+            if (!validate_request_path(request_path)) {
+                free(headers);
+                return -1; // Invalid request path
+            }
+
+            // Validate HTTP version if present
+            if (parsed >= 3) {
+                if (strncmp(version, "HTTP/", 5) != 0) {
+                    free(headers);
+                    return -1; // Invalid HTTP version
+                }
+            }
 
             // Parse Host header
             char* host_ptr = strstr(headers, "Host:");
@@ -189,7 +258,18 @@ static int parse_http_headers(HTTPServerConnection* connection) {
             // Parse Content-Length header
             char* content_len_ptr = strstr(headers, "Content-Length:");
             if (content_len_ptr) {
-                sscanf(content_len_ptr, "Content-Length: %zu", &content_len);
+                int scanned = sscanf(content_len_ptr, "Content-Length: %zu",
+                                     &content_len);
+                if (scanned != 1) {
+                    free(headers);
+                    return -1; // Invalid Content-Length
+                }
+
+                // Validate Content-Length
+                if (content_len > MAX_BODY_SIZE) {
+                    free(headers);
+                    return -1; // Body too large
+                }
             }
 
             free(headers);
@@ -201,7 +281,13 @@ static int parse_http_headers(HTTPServerConnection* connection) {
             connection->content_len  = content_len;
             connection->body_start   = header_end;
 
-            return 1; // Headers fully parsed
+            // Check allocation success
+            if (!connection->method || !connection->request_path ||
+                !connection->host) {
+                return -1;
+            }
+
+            return 1; // Headers fully parsed and validated
         }
     }
 
@@ -255,7 +341,8 @@ static void transition_to_send_state(HTTPServerConnection* connection) {
  *
  * Reads data from the TCP socket and attempts to parse HTTP headers. Once
  * headers are complete, transitions to either RECEIVE_BODY (if Content-Length
- * present) or SEND (if no body expected).
+ * present) or SEND (if no body expected). If headers are malformed or size
+ * limits are exceeded, transitions to DISPOSE.
  *
  * This function is called repeatedly by the task work function until headers
  * are fully received and parsed.
@@ -271,7 +358,9 @@ int http_server_connection_receive_headers(HTTPServerConnection* connection) {
     // Read incoming data
     int bytes_read = read_chunk_into_buffer(connection);
     if (bytes_read < 0) {
-        return -1; // Error
+        // Error or size limit exceeded - dispose connection
+        connection->state = HTTP_SERVER_CONNECTION_STATE_DISPOSE;
+        return -1;
     } else if (bytes_read == 0) {
         return 0; // No data yet, continue waiting
     }
@@ -279,12 +368,14 @@ int http_server_connection_receive_headers(HTTPServerConnection* connection) {
     // Try to parse headers
     int parse_result = parse_http_headers(connection);
     if (parse_result < 0) {
-        return -1; // Parse error
+        // Malformed request - dispose connection
+        connection->state = HTTP_SERVER_CONNECTION_STATE_DISPOSE;
+        return -1;
     } else if (parse_result == 0) {
         return 0; // Headers incomplete, need more data
     }
 
-    // Headers complete! Decide next state
+    // Headers complete and valid! Decide next state
     if (connection->content_len == 0) {
         // No body expected (GET, HEAD, etc.)
         transition_to_send_state(connection);
@@ -302,6 +393,7 @@ int http_server_connection_receive_headers(HTTPServerConnection* connection) {
  * Continues reading data from the TCP socket until the entire request body
  * (as specified by Content-Length header) has been received. Once complete,
  * extracts the body into a separate buffer and transitions to SEND state.
+ * If size limits are exceeded, transitions to DISPOSE.
  *
  * This function is called repeatedly by the task work function until the
  * body is fully received.
@@ -320,7 +412,9 @@ int http_server_connection_receive_body(HTTPServerConnection* connection) {
         // Need more data
         int bytes_read = read_chunk_into_buffer(connection);
         if (bytes_read < 0) {
-            return -1; // Error
+            // Error or size limit exceeded - dispose connection
+            connection->state = HTTP_SERVER_CONNECTION_STATE_DISPOSE;
+            return -1;
         } else if (bytes_read == 0) {
             return 0; // No data yet, continue waiting
         }
@@ -331,11 +425,40 @@ int http_server_connection_receive_body(HTTPServerConnection* connection) {
         connection->body_start + connection->content_len) {
         // Extract the body
         if (extract_request_body(connection) < 0) {
+            connection->state = HTTP_SERVER_CONNECTION_STATE_DISPOSE;
             return -1;
         }
 
         // Transition to SEND state
         transition_to_send_state(connection);
+    }
+
+    return 0;
+}
+
+static int http_server_connection_send(HTTPServerConnection* connection) {
+    if (!connection || !connection->write_buffer ||
+        connection->write_offset >= connection->write_size) {
+        return 0;
+    }
+
+    ssize_t sent =
+        tcp_client_write(&connection->tcpClient,
+                         connection->write_buffer + connection->write_offset,
+                         connection->write_size - connection->write_offset);
+
+    if (sent > 0) {
+        connection->write_offset += sent;
+    } else if (sent < 0) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            connection->state = HTTP_SERVER_CONNECTION_STATE_DISPOSE;
+            return -1;
+        }
+    }
+
+    // Finished sending
+    if (connection->write_offset >= connection->write_size) {
+        connection->state = HTTP_SERVER_CONNECTION_STATE_DISPOSE;
     }
 
     return 0;
