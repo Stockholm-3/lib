@@ -6,7 +6,9 @@
 
 //-----------------Internal Functions-----------------
 
-void tcp_server_task_work(void* context, uint64_t mon_time);
+static void tcp_server_task_work(void* context, uint64_t mon_time);
+static int  tcp_server_accept(TCPServer* server);
+static int  tcp_server_nonblocking(int fd);
 
 //----------------------------------------------------
 
@@ -82,33 +84,6 @@ int tcp_server_initiate_ptr(const char* port, TcpServerOnAccept on_accept,
     return 0;
 }
 
-int tcp_server_accept(TCPServer* server) {
-    int socket_fd = accept(server->listen_fd, NULL, NULL);
-    if (socket_fd < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return 0; // ingen ny klient
-        }
-
-        perror("accept");
-        return -1;
-    }
-
-    tcp_server_nonblocking(socket_fd);
-
-    int result = server->onAccept(socket_fd, server->context);
-    if (result != 0) {
-        close(socket_fd);
-    }
-
-    return 0;
-}
-
-void tcp_server_task_work(void* context, uint64_t mon_time) {
-    TCPServer* server = (TCPServer*)context;
-
-    tcp_server_accept(server);
-}
-
 void tcp_server_dispose(TCPServer* server) { smw_destroy_task(server->task); }
 
 void tcp_server_dispose_ptr(TCPServer** server_ptr) {
@@ -119,4 +94,94 @@ void tcp_server_dispose_ptr(TCPServer** server_ptr) {
     tcp_server_dispose(*(server_ptr));
     free(*(server_ptr));
     *(server_ptr) = NULL;
+}
+
+/**
+ * @brief Accept a pending client connection if one is available.
+ *
+ * Attempts to accept a new client from the listening socket.
+ * The listening socket is expected to be non-blocking.
+ *
+ * If no connection is currently pending (EAGAIN / EWOULDBLOCK),
+ * the function returns without error.
+ *
+ * When a client is accepted, the client socket is placed into
+ * non-blocking mode and passed to the server's accept callback.
+ *
+ * If the accept callback returns a non-zero value, the client
+ * socket is closed immediately.
+ *
+ * @param server Pointer to the TCPServer.
+ *
+ * @return
+ *   -  1 if a client was accepted.
+ *   -  0 if no client is waiting.
+ *   - -1 on a fatal accept error.
+ */
+int tcp_server_accept(TCPServer* server) {
+    int socket_fd = accept(server->listen_fd, NULL, NULL);
+    if (socket_fd < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return 0; // ingen ny klient
+        }
+
+        perror("failed to accept");
+        return -1;
+    }
+
+    tcp_server_nonblocking(socket_fd);
+
+    int result = server->onAccept(socket_fd, server->context);
+    if (result != 0) {
+        close(socket_fd);
+    }
+
+    return 1;
+}
+
+/**
+ * @brief Scheduler task that polls for incoming client connections.
+ *
+ * This function is called by the scheduler to service the listening socket.
+ * It simply delegates to tcp_server_accept().
+ *
+ * @param context   Pointer to the TCPServer.
+ * @param mon_time  Scheduler timestamp (unused).
+ */
+static void tcp_server_task_work(void* context, uint64_t mon_time) {
+    TCPServer* server = context;
+
+    int accepted = 0;
+    while (accepted < ACCEPT_BUDGET_PER_TICK) {
+        int r = tcp_server_accept(server);
+        if (r <= 0) {
+            break;
+        }
+        accepted++;
+    }
+}
+
+/**
+ * @brief Set a file descriptor to non-blocking mode.
+ *
+ * This function retrieves the current flags of the given file descriptor
+ * and adds the O_NONBLOCK flag, so that subsequent I/O calls on the fd
+ * do not block. Useful for sockets or pipes in event-driven servers.
+ *
+ * @param fd The file descriptor to set as non-blocking.
+ *
+ * @return
+ *   - 0 on success.
+ *   - -1 on failure (errno is set).
+ *
+ * @note This function only modifies the file descriptor flags; it does
+ *       not perform any other I/O operation.
+ */
+static int tcp_server_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return -1;
+    }
+
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
