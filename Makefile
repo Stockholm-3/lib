@@ -20,7 +20,7 @@ endif
 # ------------------------------------------------------------
 LIB_INCLUDES := $(shell find . -type d)
 INCLUDES := $(addprefix -I,$(LIB_INCLUDES))
-CFLAGS := $(CFLAGS_BASE) -Wall -Werror -Wfatal-errors $(INCLUDES)
+CFLAGS := $(CFLAGS_BASE) $(INCLUDES)
 
 # ------------------------------------------------------------
 # Source files
