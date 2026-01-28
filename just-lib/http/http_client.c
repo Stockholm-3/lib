@@ -178,13 +178,13 @@ static int decode_chunked(const uint8_t* in, size_t in_len, char** out,
     return 0;
 }
 
-int http_client_init(const char* u_rl, HttpClient** client_ptr,
+int http_client_init(const char* url, HttpClient** client_ptr,
                      const char* port) {
-    if (u_rl == NULL || client_ptr == NULL) {
+    if (url == NULL || client_ptr == NULL) {
         return -1;
     }
 
-    if (strlen(u_rl) > http_client_max_url_length) {
+    if (strlen(url) > http_client_max_url_length) {
         return -2;
     }
 
@@ -202,7 +202,7 @@ int http_client_init(const char* u_rl, HttpClient** client_ptr,
     client->timer    = 0;
 
     /* copy url (url buffer already zeroed by calloc) */
-    strcpy(client->url, u_rl);
+    strcpy(client->url, url);
 
     /* explicit initialization for clarity */
     client->tcp_conn    = NULL; // Also covers tls_conn in union
@@ -222,6 +222,12 @@ int http_client_init(const char* u_rl, HttpClient** client_ptr,
 
     client->is_https        = 0;
     client->ca_cert_path[0] = '\0';
+
+    /* If custom port provided, override the default */
+    if (port != NULL && strlen(port) > 0) {
+        strncpy(client->port, port, sizeof(client->port) - 1);
+        client->port[sizeof(client->port) - 1] = '\0';
+    }
 
     *(client_ptr) = client;
 
@@ -254,7 +260,16 @@ int http_client_get(const char* url, const char* port, uint64_t timeout,
 }
 
 HttpClientState http_client_work_init(HttpClient* client) {
-    // 1. Parse the URL to extract hostname, port, and path
+    // 1. Capture the custom port if one was provided during init/get
+    char custom_port[16] = {0};
+    int  has_custom_port = (client->port[0] != '\0');
+    if (has_custom_port) {
+        strncpy(custom_port, client->port, sizeof(custom_port) - 1);
+    }
+
+    // 2. Parse the URL.
+    // This will fill client->port with either the URL's port (:5959)
+    // or the scheme default (80/443).
     if (parse_url(client->url, client->hostname, client->port, client->path) !=
         0) {
         if (client->callback != NULL) {
@@ -263,90 +278,59 @@ HttpClientState http_client_work_init(HttpClient* client) {
         return HTTP_CLIENT_STATE_DISPOSE;
     }
 
-    // 2. Validate the parsed data
-    if (strlen(client->hostname) == 0) {
-        if (client->callback != NULL) {
-            client->callback("ERROR", "No hostname in URL", client->context);
-        }
-        return HTTP_CLIENT_STATE_DISPOSE;
+    // 3. OVERRIDE: If the user provided a port as a function argument,
+    // it must overwrite whatever parse_url just did.
+    if (has_custom_port) {
+        strncpy(client->port, custom_port, sizeof(client->port) - 1);
+        client->port[sizeof(client->port) - 1] = '\0';
     }
 
-    // 3. Detect if this is HTTPS
+    // 4. Scheme Detection
     client->is_https = (strncmp(client->url, "https://", 8) == 0);
 
-    // 4. Initialize response buffer
-    client->response[0] = '\0';
-
-    // 5. Log what we're about to do
-    printf("[HTTP_CLIENT] Connecting to %s://%s:%s%s\n",
+    // Debug log to verify the final decision
+    printf("[HTTP_CLIENT] Final Connection Target: %s://%s:%s%s\n",
            client->is_https ? "https" : "http", client->hostname, client->port,
            client->path);
 
-    // Move to connect state
     return HTTP_CLIENT_STATE_CONNECT;
 }
 
 HttpClientState http_client_work_connect(HttpClient* client) {
     if (client->is_https) {
-        // HTTPS - use TLS client
+        /* ---------- HTTPS (unchanged logic) ---------- */
+
         TLSClient* tls_client = malloc(sizeof(TLSClient));
-        if (tls_client == NULL) {
-            if (client->callback != NULL) {
-                client->callback("ERROR", "Memory allocation failed",
-                                 client->context);
-            }
+        if (!tls_client) {
+            client->callback("ERROR", "Memory allocation failed",
+                             client->context);
             return HTTP_CLIENT_STATE_DISPOSE;
         }
 
-        // Initialize TLS client
         if (tls_client_init(tls_client) != 0) {
-            if (client->callback != NULL) {
-                client->callback("ERROR", "TLS initialization failed",
-                                 client->context);
-            }
+            client->callback("ERROR", "TLS initialization failed",
+                             client->context);
             free(tls_client);
             return HTTP_CLIENT_STATE_DISPOSE;
         }
 
-        // Load CA certificates
-        const char* ca_path = client->ca_cert_path[0] != '\0'
-                                  ? client->ca_cert_path
-                                  : find_ca_cert_path();
+        const char* ca_path = client->ca_cert_path[0] ? client->ca_cert_path
+                                                      : find_ca_cert_path();
 
-        if (ca_path == NULL) {
-            if (client->callback != NULL) {
-                client->callback(
-                    "ERROR",
-                    "No CA certificate file found. "
-                    "Install ca-certificates package or set CA path.",
-                    client->context);
-            }
+        if (!ca_path ||
+            tls_client_load_ca_cert_file(tls_client, ca_path) != 0) {
+            client->callback("ERROR", "Failed to load CA certificates",
+                             client->context);
             tls_client_dispose(tls_client);
             free(tls_client);
             return HTTP_CLIENT_STATE_DISPOSE;
         }
 
-        printf("[HTTP_CLIENT] Using CA certificates from: %s\n", ca_path);
+        int r = tls_client_connect(tls_client, client->hostname, client->port);
 
-        if (tls_client_load_ca_cert_file(tls_client, ca_path) != 0) {
-            if (client->callback != NULL) {
-                client->callback("ERROR", "Failed to load CA certificates",
-                                 client->context);
-            }
-            tls_client_dispose(tls_client);
-            free(tls_client);
-            return HTTP_CLIENT_STATE_DISPOSE;
-        }
-
-        // Connect using TLS
-        int result =
-            tls_client_connect(tls_client, client->hostname, client->port);
-
-        if (result < 0) {
-            if (client->callback != NULL) {
-                client->callback("ERROR", "Failed to initiate TLS connection",
-                                 client->context);
-            }
+        if (r < 0) {
+            client->callback("ERROR", "Failed to initiate TLS connection",
+                             client->context);
             tls_client_dispose(tls_client);
             free(tls_client);
             return HTTP_CLIENT_STATE_DISPOSE;
@@ -354,45 +338,37 @@ HttpClientState http_client_work_connect(HttpClient* client) {
 
         client->tls_conn = tls_client;
 
-        // If handshake is in progress, move to handshake state
-        if (result == 1) {
-            return HTTP_CLIENT_STATE_TLS_HANDSHAKE;
-        }
-
-        // Handshake completed immediately
-        return HTTP_CLIENT_STATE_WRITING;
-
-    } else {
-        // HTTP - use TCP client
-        TCPClient* tcp_client = malloc(sizeof(TCPClient));
-        if (tcp_client == NULL) {
-            if (client->callback != NULL) {
-                client->callback("ERROR", "Memory allocation failed",
-                                 client->context);
-            }
-            return HTTP_CLIENT_STATE_DISPOSE;
-        }
-
-        // Initialize the TCPClient
-        tcp_client->fd = -1;
-
-        // Connect using TCP module
-        int result =
-            tcp_client_connect(tcp_client, client->hostname, client->port);
-
-        if (result != 0) {
-            if (client->callback != NULL) {
-                client->callback("ERROR", "Failed to initiate connection",
-                                 client->context);
-            }
-            free(tcp_client);
-            return HTTP_CLIENT_STATE_DISPOSE;
-        }
-
-        client->tcp_conn = tcp_client;
-
-        return HTTP_CLIENT_STATE_CONNECTING;
+        return (r == 1) ? HTTP_CLIENT_STATE_TLS_HANDSHAKE
+                        : HTTP_CLIENT_STATE_WRITING;
     }
+
+    /* ---------- HTTP (FIXED) ---------- */
+
+    TCPClient* tcp_client = malloc(sizeof(TCPClient));
+    if (!tcp_client) {
+        client->callback("ERROR", "Memory allocation failed", client->context);
+        return HTTP_CLIENT_STATE_DISPOSE;
+    }
+
+    tcp_client->fd = -1;
+
+    int r = tcp_client_connect(tcp_client, client->hostname, client->port);
+
+    if (r < 0) {
+        client->callback("ERROR", "Failed to initiate connection",
+                         client->context);
+        free(tcp_client);
+        return HTTP_CLIENT_STATE_DISPOSE;
+    }
+
+    client->tcp_conn = tcp_client;
+
+    // IMPORTANT: distinguish states
+    if (r == 1) {
+        return HTTP_CLIENT_STATE_CONNECTING; // EINPROGRESS
+    }
+
+    return HTTP_CLIENT_STATE_WRITING; // connected immediately
 }
 
 HttpClientState http_client_work_connecting(HttpClient* client) {
@@ -908,60 +884,67 @@ void http_client_dispose(HttpClient** client_ptr) {
  *
  * @return 0 on success, non-zero on failure.
  */
-int parse_url(const char* url, char* hostname, char* port, char* path) {
-    if (url == NULL || hostname == NULL || port == NULL || path == NULL) {
+int parse_url(const char* url, char* hostname, char* port_str, char* path) {
+    if (url == NULL || hostname == NULL || port_str == NULL || path == NULL) {
         return -1;
     }
 
-    // Default values
-    strcpy(port, "80");
-    strcpy(path, "/");
+    // 1. Initial Defaults
+    char        default_port[6] = "80";
+    const char* start           = url;
 
-    // Skip "http://" or "https://"
-    const char* start = url;
+    // 2. Detect Scheme and set appropriate default port
     if (strncmp(url, "http://", 7) == 0) {
         start = url + 7;
-        strcpy(port, "80");
+        strcpy(default_port, "80");
     } else if (strncmp(url, "https://", 8) == 0) {
         start = url + 8;
-        strcpy(port, "443");
+        strcpy(default_port, "443");
     }
 
-    // Find the end of hostname
+    // 3. Find end of hostname (stops at ':', '/', or end of string)
     const char* end = start;
     while (*end && *end != ':' && *end != '/') {
         end++;
     }
 
-    // Extract hostname
-    int hostname_len = end - start;
-    if (hostname_len == 0 || hostname_len > 255) {
-        return -1;
+    int hostname_len = (int)(end - start);
+    if (hostname_len <= 0 || hostname_len > 255) {
+        return -1; // Invalid hostname
     }
 
-    strncpy(hostname, start, hostname_len);
+    memcpy(hostname, start, hostname_len);
     hostname[hostname_len] = '\0';
 
-    // Check for port
+    // 4. Handle Port
     if (*end == ':') {
-        end++;
-
+        end++; // Skip ':'
         const char* port_start = end;
         while (*end && *end != '/') {
             end++;
         }
-
-        int port_len = end - port_start;
-        if (port_len > 0 && port_len < 16) {
-            strncpy(port, port_start, port_len);
-            port[port_len] = '\0';
+        int port_len = (int)(end - port_start);
+        if (port_len > 0 && port_len < 6) {
+            memcpy(port_str, port_start, port_len);
+            port_str[port_len] = '\0';
+        } else {
+            // Found ':' but no valid digits (e.g., "example.com:/")
+            // Fallback to scheme default
+            strcpy(port_str, default_port);
         }
+    } else {
+        // No ':' found, use the default port determined by the scheme
+        strcpy(port_str, default_port);
     }
 
-    // Extract path
+    // 5. Handle Path
     if (*end == '/') {
+        // Copy the rest of the string as the path
         strncpy(path, end, 511);
         path[511] = '\0';
+    } else {
+        // No path provided (end of string reached), default to "/"
+        strcpy(path, "/");
     }
 
     return 0;
