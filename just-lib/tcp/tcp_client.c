@@ -30,40 +30,40 @@ int tcp_client_connect(TCPClient* c, const char* host, const char* port) {
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
-    printf("TCP_DEBUG: Calling getaddrinfo...\n");
     int gai_result = getaddrinfo(host, port, &hints, &res);
     if (gai_result != 0) {
         printf("TCP_DEBUG: getaddrinfo failed: %s\n", gai_strerror(gai_result));
         return -1;
     }
-    printf("TCP_DEBUG: getaddrinfo succeeded\n");
 
     int fd = -1;
-    for (struct addrinfo* rp = res; rp; rp = rp->ai_next) {
-        printf("TCP_DEBUG: Creating socket with family=%d\n", rp->ai_family);
-        fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        printf("TCP_DEBUG: socket() returned fd=%d\n", fd);
+    int rc = -1;
 
+    for (struct addrinfo* rp = res; rp; rp = rp->ai_next) {
+        fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (fd < 0) {
-            printf("TCP_DEBUG: socket() failed: %s\n", strerror(errno));
             continue;
         }
 
-        printf("TCP_DEBUG: Setting non-blocking mode\n");
+        // non-blocking
         int flags = fcntl(fd, F_GETFL, 0);
         fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 
-        printf("TCP_DEBUG: Calling connect()...\n");
-        int connect_result = connect(fd, rp->ai_addr, rp->ai_addrlen);
-        printf("TCP_DEBUG: connect() returned %d, errno=%d (%s)\n",
-               connect_result, errno, strerror(errno));
+        int cr = connect(fd, rp->ai_addr, rp->ai_addrlen);
 
-        if (connect_result == 0 || errno == EINPROGRESS) {
-            printf("TCP_DEBUG: Connection initiated successfully\n");
+        if (cr == 0) {
+            // connected immediately
+            rc = 0;
             break;
         }
 
-        printf("TCP_DEBUG: Connection failed, trying next address\n");
+        if (cr < 0 && errno == EINPROGRESS) {
+            // connection in progress (normal for non-blocking)
+            rc = 1;
+            break;
+        }
+
+        // real failure
         close(fd);
         fd = -1;
     }
@@ -71,17 +71,22 @@ int tcp_client_connect(TCPClient* c, const char* host, const char* port) {
     freeaddrinfo(res);
 
     if (fd < 0) {
-        printf("TCP_DEBUG: All connection attempts failed\n");
         return -1;
     }
 
     c->fd = fd;
-    printf("TCP_DEBUG: Success! Stored fd=%d in TCPClient\n", fd);
-    return 0;
+    return rc;
 }
 
 int tcp_client_write(TCPClient* c, const uint8_t* buf, size_t len) {
-    return send(c->fd, buf, len, MSG_NOSIGNAL);
+    int n = send(c->fd, buf, len, MSG_NOSIGNAL);
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return 0; // Would block, try again later
+        }
+        return -1; // Real error
+    }
+    return n;
 }
 
 int tcp_client_read(TCPClient* c, uint8_t* buf, size_t len) {
