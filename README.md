@@ -1,4 +1,4 @@
-C Library by Stockholm-3 used for all projects
+C Library by Stockholm-3 including various usefull modules
 
 ![C](https://img.shields.io/badge/C-%2300599C.svg?style=flat&logo=c&logoColor=white)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
