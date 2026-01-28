@@ -1,3 +1,8 @@
+/**
+ * @file http_client.c
+ * @brief Implementation of asynchronous HTTP/HTTPS client.
+ */
+
 #include "http_client.h"
 
 #include "errno.h"
@@ -10,13 +15,39 @@
 #define CHUNK_SIZE 4096
 #define PORTSIZE 100
 
+// Default CA certificate paths for common systems
+static const char* g_default_ca_paths[] = {
+    "/etc/ssl/certs/ca-certificates.crt",     // Debian/Ubuntu/Gentoo
+    "/etc/pki/tls/certs/ca-bundle.crt",       // Fedora/RHEL/CentOS
+    "/etc/ssl/cert.pem",                      // Alpine/macOS
+    "/etc/ssl/ca-bundle.pem",                 // OpenSUSE
+    "/usr/local/share/certs/ca-root-nss.crt", // FreeBSD
+    NULL};
+
 //---------------Internal functions----------------
 
 static int decode_chunked(const uint8_t* in, size_t in_len, char** out,
                           size_t* out_len);
 int parse_url(const char* url, char* hostname, char* port_str, char* path);
+static const char* find_ca_cert_path(void);
 
 //----------------------------------------------------
+
+/**
+ * @brief Find a valid CA certificate file on the system.
+ *
+ * @return Path to CA cert file, or NULL if none found.
+ */
+static const char* find_ca_cert_path(void) {
+    for (int i = 0; g_default_ca_paths[i] != NULL; i++) {
+        FILE* f = fopen(g_default_ca_paths[i], "r");
+        if (f) {
+            fclose(f);
+            return g_default_ca_paths[i];
+        }
+    }
+    return NULL;
+}
 
 /**
  * @brief Decode HTTP chunked transfer encoding.
@@ -174,7 +205,7 @@ int http_client_init(const char* u_rl, HttpClient** client_ptr,
     strcpy(client->url, u_rl);
 
     /* explicit initialization for clarity */
-    client->tcp_conn    = NULL;
+    client->tcp_conn    = NULL; // Also covers tls_conn in union
     client->hostname[0] = '\0';
     client->path[0]     = '\0';
     client->port[0]     = '\0';
@@ -189,7 +220,21 @@ int http_client_init(const char* u_rl, HttpClient** client_ptr,
     client->status_code      = 0;
     client->body             = NULL;
 
+    client->is_https        = 0;
+    client->ca_cert_path[0] = '\0';
+
     *(client_ptr) = client;
+
+    return 0;
+}
+
+int http_client_set_ca_cert(HttpClient* client, const char* ca_path) {
+    if (client == NULL || ca_path == NULL) {
+        return -1;
+    }
+
+    strncpy(client->ca_cert_path, ca_path, sizeof(client->ca_cert_path) - 1);
+    client->ca_cert_path[sizeof(client->ca_cert_path) - 1] = '\0';
 
     return 0;
 }
@@ -226,48 +271,136 @@ HttpClientState http_client_work_init(HttpClient* client) {
         return HTTP_CLIENT_STATE_DISPOSE;
     }
 
-    // 3. Initialize response buffer
+    // 3. Detect if this is HTTPS
+    client->is_https = (strncmp(client->url, "https://", 8) == 0);
+
+    // 4. Initialize response buffer
     client->response[0] = '\0';
 
-    // 4. Log what we're about to do
-    printf("[HTTP_CLIENT] Connecting to %s:%s%s\n", client->hostname,
-           client->port, client->path);
+    // 5. Log what we're about to do
+    printf("[HTTP_CLIENT] Connecting to %s://%s:%s%s\n",
+           client->is_https ? "https" : "http", client->hostname, client->port,
+           client->path);
+
     // Move to connect state
     return HTTP_CLIENT_STATE_CONNECT;
 }
 
 HttpClientState http_client_work_connect(HttpClient* client) {
-    // Allocate TCPClient on heap
-    TCPClient* tcp_client = malloc(sizeof(TCPClient));
-    if (tcp_client == NULL) {
-        if (client->callback != NULL) {
-            client->callback("ERROR", "Memory allocation failed",
-                             client->context);
+    if (client->is_https) {
+        // HTTPS - use TLS client
+        TLSClient* tls_client = malloc(sizeof(TLSClient));
+        if (tls_client == NULL) {
+            if (client->callback != NULL) {
+                client->callback("ERROR", "Memory allocation failed",
+                                 client->context);
+            }
+            return HTTP_CLIENT_STATE_DISPOSE;
         }
-        return HTTP_CLIENT_STATE_DISPOSE;
-    }
 
-    // Initialize the TCPClient
-    tcp_client->fd = -1;
-
-    // Connect using TCP module
-    int result = tcp_client_connect(tcp_client, client->hostname, client->port);
-
-    if (result != 0) {
-        if (client->callback != NULL) {
-            client->callback("ERROR", "Failed to initiate connection",
-                             client->context);
+        // Initialize TLS client
+        if (tls_client_init(tls_client) != 0) {
+            if (client->callback != NULL) {
+                client->callback("ERROR", "TLS initialization failed",
+                                 client->context);
+            }
+            free(tls_client);
+            return HTTP_CLIENT_STATE_DISPOSE;
         }
-        free(tcp_client);
-        return HTTP_CLIENT_STATE_DISPOSE;
+
+        // Load CA certificates
+        const char* ca_path = client->ca_cert_path[0] != '\0'
+                                  ? client->ca_cert_path
+                                  : find_ca_cert_path();
+
+        if (ca_path == NULL) {
+            if (client->callback != NULL) {
+                client->callback(
+                    "ERROR",
+                    "No CA certificate file found. "
+                    "Install ca-certificates package or set CA path.",
+                    client->context);
+            }
+            tls_client_dispose(tls_client);
+            free(tls_client);
+            return HTTP_CLIENT_STATE_DISPOSE;
+        }
+
+        printf("[HTTP_CLIENT] Using CA certificates from: %s\n", ca_path);
+
+        if (tls_client_load_ca_cert_file(tls_client, ca_path) != 0) {
+            if (client->callback != NULL) {
+                client->callback("ERROR", "Failed to load CA certificates",
+                                 client->context);
+            }
+            tls_client_dispose(tls_client);
+            free(tls_client);
+            return HTTP_CLIENT_STATE_DISPOSE;
+        }
+
+        // Connect using TLS
+        int result =
+            tls_client_connect(tls_client, client->hostname, client->port);
+
+        if (result < 0) {
+            if (client->callback != NULL) {
+                client->callback("ERROR", "Failed to initiate TLS connection",
+                                 client->context);
+            }
+            tls_client_dispose(tls_client);
+            free(tls_client);
+            return HTTP_CLIENT_STATE_DISPOSE;
+        }
+
+        client->tls_conn = tls_client;
+
+        // If handshake is in progress, move to handshake state
+        if (result == 1) {
+            return HTTP_CLIENT_STATE_TLS_HANDSHAKE;
+        }
+
+        // Handshake completed immediately
+        return HTTP_CLIENT_STATE_WRITING;
+
+    } else {
+        // HTTP - use TCP client
+        TCPClient* tcp_client = malloc(sizeof(TCPClient));
+        if (tcp_client == NULL) {
+            if (client->callback != NULL) {
+                client->callback("ERROR", "Memory allocation failed",
+                                 client->context);
+            }
+            return HTTP_CLIENT_STATE_DISPOSE;
+        }
+
+        // Initialize the TCPClient
+        tcp_client->fd = -1;
+
+        // Connect using TCP module
+        int result =
+            tcp_client_connect(tcp_client, client->hostname, client->port);
+
+        if (result != 0) {
+            if (client->callback != NULL) {
+                client->callback("ERROR", "Failed to initiate connection",
+                                 client->context);
+            }
+            free(tcp_client);
+            return HTTP_CLIENT_STATE_DISPOSE;
+        }
+
+        client->tcp_conn = tcp_client;
+
+        return HTTP_CLIENT_STATE_CONNECTING;
     }
-
-    client->tcp_conn = tcp_client;
-
-    return HTTP_CLIENT_STATE_CONNECTING;
 }
 
 HttpClientState http_client_work_connecting(HttpClient* client) {
+    // This state is only for plain HTTP (TCP)
+    if (client->is_https) {
+        return HTTP_CLIENT_STATE_DISPOSE; // Should not reach here
+    }
+
     if (client->tcp_conn == NULL || client->tcp_conn->fd < 0) {
         return HTTP_CLIENT_STATE_DISPOSE;
     }
@@ -296,6 +429,30 @@ HttpClientState http_client_work_connecting(HttpClient* client) {
     }
 }
 
+HttpClientState http_client_work_tls_handshake(HttpClient* client) {
+    // This state is only for HTTPS (TLS)
+    if (!client->is_https || client->tls_conn == NULL) {
+        return HTTP_CLIENT_STATE_DISPOSE;
+    }
+
+    int result = tls_client_handshake(client->tls_conn);
+
+    if (result == 0) {
+        // Handshake completed successfully
+        printf("[HTTP_CLIENT] TLS handshake completed\n");
+        return HTTP_CLIENT_STATE_WRITING;
+    } else if (result == 1) {
+        // Still in progress, try again next tick
+        return HTTP_CLIENT_STATE_TLS_HANDSHAKE;
+    } else {
+        // Handshake failed
+        if (client->callback != NULL) {
+            client->callback("ERROR", "TLS handshake failed", client->context);
+        }
+        return HTTP_CLIENT_STATE_DISPOSE;
+    }
+}
+
 HttpClientState http_client_work_writing(HttpClient* client) {
     if (client->write_buffer == NULL) {
         client->write_buffer = malloc(2048);
@@ -307,7 +464,7 @@ HttpClientState http_client_work_writing(HttpClient* client) {
             return HTTP_CLIENT_STATE_DISPOSE;
         }
 
-        // browser-like User-Agent та headers
+        // browser-like User-Agent and headers
         int len = snprintf(
             (char*)client->write_buffer, 2048,
             "GET %s HTTP/1.1\r\n"
@@ -325,23 +482,26 @@ HttpClientState http_client_work_writing(HttpClient* client) {
         client->write_offset = 0;
     }
 
-    // Send data
-    ssize_t sent =
-        send(client->tcp_conn->fd, client->write_buffer + client->write_offset,
-             client->write_size - client->write_offset, MSG_NOSIGNAL);
-
-    /* write attempt logged at debug level previously; suppressed in normal runs
-     */
+    // Send data (works for both TCP and TLS)
+    ssize_t sent;
+    if (client->is_https) {
+        sent = tls_client_write(client->tls_conn,
+                                client->write_buffer + client->write_offset,
+                                client->write_size - client->write_offset);
+    } else {
+        sent = tcp_client_write(client->tcp_conn,
+                                client->write_buffer + client->write_offset,
+                                client->write_size - client->write_offset);
+    }
 
     if (sent < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return HTTP_CLIENT_STATE_WRITING; // Try again later
-        } else {
-            if (client->callback != NULL) {
-                client->callback("ERROR", "Send failed", client->context);
-            }
-            return HTTP_CLIENT_STATE_DISPOSE;
+        if (client->callback != NULL) {
+            client->callback("ERROR", "Send failed", client->context);
         }
+        return HTTP_CLIENT_STATE_DISPOSE;
+    } else if (sent == 0) {
+        // Would block, try again later
+        return HTTP_CLIENT_STATE_WRITING;
     }
 
     client->write_offset += sent;
@@ -362,8 +522,15 @@ HttpClientState http_client_work_reading(HttpClient* client) {
 
     uint8_t chunk_buffer[CHUNK_SIZE];
 
-    int bytes_read =
-        tcp_client_read(client->tcp_conn, chunk_buffer, sizeof(chunk_buffer));
+    // Read data (works for both TCP and TLS)
+    int bytes_read;
+    if (client->is_https) {
+        bytes_read = tls_client_read(client->tls_conn, chunk_buffer,
+                                     sizeof(chunk_buffer));
+    } else {
+        bytes_read = tcp_client_read(client->tcp_conn, chunk_buffer,
+                                     sizeof(chunk_buffer));
+    }
 
     if (bytes_read < 0) {
         if (client->callback) {
@@ -417,8 +584,6 @@ HttpClientState http_client_work_reading(HttpClient* client) {
         /* No headers parsed yet but connection closed - nothing to do */
         return HTTP_CLIENT_STATE_DISPOSE;
     }
-
-    /* read progress suppressed in normal logs */
 
     // Grow buffer
     size_t   new_size   = client->read_buffer_size + bytes_read;
@@ -509,9 +674,8 @@ HttpClientState http_client_work_reading(HttpClient* client) {
         } else if (client->chunked) {
             // Check for terminating chunk sequence "0\r\n\r\n" in buffer
             const char   TERM[]   = "0\r\n\r\n";
-            const size_t TERM_LEN = 5; /* actually "0\r\n\r\n" is 5 bytes:
-                                          '0','\r','\n','\r','\n' */
-            size_t found = SIZE_MAX;
+            const size_t TERM_LEN = 5;
+            size_t       found    = SIZE_MAX;
             for (size_t j = client->body_start;
                  j + TERM_LEN <= client->read_buffer_size; j++) {
                 if (memcmp(client->read_buffer + j, TERM, TERM_LEN) == 0) {
@@ -543,41 +707,44 @@ HttpClientState http_client_work_reading(HttpClient* client) {
             return HTTP_CLIENT_STATE_READING;
         } else {
             // No content-length and not chunked -> assume server will close
-            // connection before end of body. Use MSG_PEEK to detect EOF on
-            // socket.
-            int fd = client->tcp_conn ? client->tcp_conn->fd : -1;
-            if (fd >= 0) {
-                uint8_t peekbuf[1];
-                ssize_t p = recv(fd, peekbuf, 1, MSG_PEEK | MSG_DONTWAIT);
-                if (p == 0) {
-                    // EOF detected: finalize body as all remaining bytes
-                    client->content_len =
-                        client->read_buffer_size > client->body_start
-                            ? client->read_buffer_size - client->body_start
-                            : 0;
-                    if (client->content_len > 0) {
-                        client->body = malloc(client->content_len + 1);
-                        if (client->body) {
-                            memcpy(client->body,
-                                   client->read_buffer + client->body_start,
-                                   client->content_len);
-                            client->body[client->content_len] = '\0';
+            // connection. For HTTPS, rely on close_notify. For HTTP, peek.
+            if (client->is_https) {
+                // TLS will return -2 when close_notify is received
+                return HTTP_CLIENT_STATE_READING;
+            } else {
+                // Use MSG_PEEK for HTTP
+                int fd = client->tcp_conn ? client->tcp_conn->fd : -1;
+                if (fd >= 0) {
+                    uint8_t peekbuf[1];
+                    ssize_t p = recv(fd, peekbuf, 1, MSG_PEEK | MSG_DONTWAIT);
+                    if (p == 0) {
+                        // EOF detected: finalize body
+                        client->content_len =
+                            client->read_buffer_size > client->body_start
+                                ? client->read_buffer_size - client->body_start
+                                : 0;
+                        if (client->content_len > 0) {
+                            client->body = malloc(client->content_len + 1);
+                            if (client->body) {
+                                memcpy(client->body,
+                                       client->read_buffer + client->body_start,
+                                       client->content_len);
+                                client->body[client->content_len] = '\0';
+                            }
                         }
-                    }
-                    return HTTP_CLIENT_STATE_DONE;
-                } else if (p < 0) {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                        // no data available yet, keep reading
-                        return HTTP_CLIENT_STATE_READING;
-                    } else {
-                        if (client->callback) {
-                            client->callback("ERROR", "Peek failed",
-                                             client->context);
+                        return HTTP_CLIENT_STATE_DONE;
+                    } else if (p < 0) {
+                        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                            return HTTP_CLIENT_STATE_READING;
+                        } else {
+                            if (client->callback) {
+                                client->callback("ERROR", "Peek failed",
+                                                 client->context);
+                            }
+                            return HTTP_CLIENT_STATE_DISPOSE;
                         }
-                        return HTTP_CLIENT_STATE_DISPOSE;
                     }
                 }
-                // p > 0 -> there is data pending, keep reading
             }
         }
     }
@@ -618,10 +785,20 @@ HttpClientState http_client_work_done(HttpClient* client) {
         client->write_buffer = NULL;
     }
 
-    // Close TCP connection
-    if (client->tcp_conn) {
-        tcp_client_disconnect(client->tcp_conn);
-        client->tcp_conn = NULL;
+    // Close connection (TCP or TLS)
+    if (client->is_https) {
+        if (client->tls_conn) {
+            tls_client_disconnect(client->tls_conn);
+            tls_client_dispose(client->tls_conn);
+            free(client->tls_conn);
+            client->tls_conn = NULL;
+        }
+    } else {
+        if (client->tcp_conn) {
+            tcp_client_disconnect(client->tcp_conn);
+            free(client->tcp_conn);
+            client->tcp_conn = NULL;
+        }
     }
 
     return HTTP_CLIENT_STATE_DISPOSE;
@@ -654,6 +831,10 @@ void http_client_work(void* context, uint64_t mon_time) {
         client->state = http_client_work_connecting(client);
         break;
 
+    case HTTP_CLIENT_STATE_TLS_HANDSHAKE:
+        client->state = http_client_work_tls_handshake(client);
+        break;
+
     case HTTP_CLIENT_STATE_WRITING:
         client->state = http_client_work_writing(client);
         break;
@@ -681,6 +862,26 @@ void http_client_dispose(HttpClient** client_ptr) {
 
     if (client->task != NULL) {
         smw_destroy_task(client->task);
+    }
+
+    // Clean up connection if still open
+    if (client->is_https && client->tls_conn) {
+        tls_client_dispose(client->tls_conn);
+        free(client->tls_conn);
+    } else if (!client->is_https && client->tcp_conn) {
+        tcp_client_disconnect(client->tcp_conn);
+        free(client->tcp_conn);
+    }
+
+    // Clean up buffers
+    if (client->read_buffer) {
+        free(client->read_buffer);
+    }
+    if (client->body) {
+        free(client->body);
+    }
+    if (client->write_buffer) {
+        free(client->write_buffer);
     }
 
     free(client);
