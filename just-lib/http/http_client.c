@@ -14,7 +14,7 @@
 
 static int decode_chunked(const uint8_t* in, size_t in_len, char** out,
                           size_t* out_len);
-int  parse_url(const char* url, char* hostname, char* port_str, char* path);
+int parse_url(const char* url, char* hostname, char* port_str, char* path);
 
 //----------------------------------------------------
 
@@ -194,9 +194,8 @@ int http_client_init(const char* u_rl, HttpClient** client_ptr,
     return 0;
 }
 
-int http_client_get(const char* url, uint64_t timeout,
-                    void (*callback)(const char* event, const char* response),
-                    const char* port) {
+int http_client_get(const char* url, const char* port, uint64_t timeout,
+                    HttpClientCallback callback, void* context) {
     HttpClient* client = NULL;
     if (http_client_init(url, &client, port) != 0) {
         return -1;
@@ -204,6 +203,7 @@ int http_client_get(const char* url, uint64_t timeout,
 
     client->timeout  = timeout;
     client->callback = callback;
+    client->context  = context;
 
     return 0;
 }
@@ -213,7 +213,7 @@ HttpClientState http_client_work_init(HttpClient* client) {
     if (parse_url(client->url, client->hostname, client->port, client->path) !=
         0) {
         if (client->callback != NULL) {
-            client->callback("ERROR", "Invalid URL");
+            client->callback("ERROR", "Invalid URL", client->context);
         }
         return HTTP_CLIENT_STATE_DISPOSE;
     }
@@ -221,7 +221,7 @@ HttpClientState http_client_work_init(HttpClient* client) {
     // 2. Validate the parsed data
     if (strlen(client->hostname) == 0) {
         if (client->callback != NULL) {
-            client->callback("ERROR", "No hostname in URL");
+            client->callback("ERROR", "No hostname in URL", client->context);
         }
         return HTTP_CLIENT_STATE_DISPOSE;
     }
@@ -241,7 +241,8 @@ HttpClientState http_client_work_connect(HttpClient* client) {
     TCPClient* tcp_client = malloc(sizeof(TCPClient));
     if (tcp_client == NULL) {
         if (client->callback != NULL) {
-            client->callback("ERROR", "Memory allocation failed");
+            client->callback("ERROR", "Memory allocation failed",
+                             client->context);
         }
         return HTTP_CLIENT_STATE_DISPOSE;
     }
@@ -254,7 +255,8 @@ HttpClientState http_client_work_connect(HttpClient* client) {
 
     if (result != 0) {
         if (client->callback != NULL) {
-            client->callback("ERROR", "Failed to initiate connection");
+            client->callback("ERROR", "Failed to initiate connection",
+                             client->context);
         }
         free(tcp_client);
         return HTTP_CLIENT_STATE_DISPOSE;
@@ -288,7 +290,7 @@ HttpClientState http_client_work_connecting(HttpClient* client) {
     } else {
         // Connection failed
         if (client->callback != NULL) {
-            client->callback("ERROR", "Connection failed");
+            client->callback("ERROR", "Connection failed", client->context);
         }
         return HTTP_CLIENT_STATE_DISPOSE;
     }
@@ -299,7 +301,8 @@ HttpClientState http_client_work_writing(HttpClient* client) {
         client->write_buffer = malloc(2048);
         if (client->write_buffer == NULL) {
             if (client->callback != NULL) {
-                client->callback("ERROR", "Memory allocation failed");
+                client->callback("ERROR", "Memory allocation failed",
+                                 client->context);
             }
             return HTTP_CLIENT_STATE_DISPOSE;
         }
@@ -335,7 +338,7 @@ HttpClientState http_client_work_writing(HttpClient* client) {
             return HTTP_CLIENT_STATE_WRITING; // Try again later
         } else {
             if (client->callback != NULL) {
-                client->callback("ERROR", "Send failed");
+                client->callback("ERROR", "Send failed", client->context);
             }
             return HTTP_CLIENT_STATE_DISPOSE;
         }
@@ -364,7 +367,7 @@ HttpClientState http_client_work_reading(HttpClient* client) {
 
     if (bytes_read < 0) {
         if (client->callback) {
-            client->callback("ERROR", "Read failed");
+            client->callback("ERROR", "Read failed", client->context);
         }
         return HTTP_CLIENT_STATE_DISPOSE;
     } else if (bytes_read == 0) {
@@ -387,7 +390,8 @@ HttpClientState http_client_work_reading(HttpClient* client) {
                                    remaining, &decoded, &dec_len);
                 if (rc != 0) {
                     if (client->callback) {
-                        client->callback("ERROR", "Chunked decode failed");
+                        client->callback("ERROR", "Chunked decode failed",
+                                         client->context);
                     }
                     return HTTP_CLIENT_STATE_DISPOSE;
                 }
@@ -421,7 +425,8 @@ HttpClientState http_client_work_reading(HttpClient* client) {
     uint8_t* new_buffer = realloc(client->read_buffer, new_size);
     if (!new_buffer) {
         if (client->callback) {
-            client->callback("ERROR", "Memory allocation failed");
+            client->callback("ERROR", "Memory allocation failed",
+                             client->context);
         }
         return HTTP_CLIENT_STATE_DISPOSE;
     }
@@ -443,7 +448,8 @@ HttpClientState http_client_work_reading(HttpClient* client) {
                 char* headers    = malloc(header_end + 1);
                 if (!headers) {
                     if (client->callback) {
-                        client->callback("ERROR", "Memory allocation failed");
+                        client->callback("ERROR", "Memory allocation failed",
+                                         client->context);
                     }
                     return HTTP_CLIENT_STATE_DISPOSE;
                 }
@@ -524,7 +530,8 @@ HttpClientState http_client_work_reading(HttpClient* client) {
                                    total_len, &decoded, &dec_len);
                 if (rc != 0) {
                     if (client->callback) {
-                        client->callback("ERROR", "Chunked decode failed");
+                        client->callback("ERROR", "Chunked decode failed",
+                                         client->context);
                     }
                     return HTTP_CLIENT_STATE_DISPOSE;
                 }
@@ -564,7 +571,8 @@ HttpClientState http_client_work_reading(HttpClient* client) {
                         return HTTP_CLIENT_STATE_READING;
                     } else {
                         if (client->callback) {
-                            client->callback("ERROR", "Peek failed");
+                            client->callback("ERROR", "Peek failed",
+                                             client->context);
                         }
                         return HTTP_CLIENT_STATE_DISPOSE;
                     }
@@ -582,14 +590,15 @@ HttpClientState http_client_work_done(HttpClient* client) {
         if (client->status_code >= 200 && client->status_code < 300) {
             // Success response
             client->callback("RESPONSE",
-                             client->body ? (char*)client->body : "");
+                             client->body ? (char*)client->body : "",
+                             client->context);
         } else {
             // Error response
             char error_info[256];
             snprintf(error_info, sizeof(error_info), "HTTP %d: %s",
                      client->status_code,
                      client->body ? (char*)client->body : "");
-            client->callback("ERROR", error_info);
+            client->callback("ERROR", error_info, client->context);
         }
     }
 
@@ -625,7 +634,7 @@ void http_client_work(void* context, uint64_t mon_time) {
         client->timer = mon_time;
     } else if (mon_time >= client->timer + client->timeout) {
         if (client->callback != NULL) {
-            client->callback("TIMEOUT", NULL);
+            client->callback("TIMEOUT", NULL, client->context);
         }
 
         http_client_dispose(&client);
