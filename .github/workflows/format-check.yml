@@ -1,0 +1,37 @@
+name: Check Formatting
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+
+jobs:
+  format-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format-19
+        run: sudo apt-get update && sudo apt-get install -y clang-format-19
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          misformatted=0
+          while IFS= read -r -d '' file; do
+            if ! clang-format-19 -style=file --dry-run --Werror "$file"; then
+              echo "❌ File not properly formatted: $file"
+              misformatted=1
+            fi
+          done < <(find . -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' \) -print0)
+
+          if [ $misformatted -ne 0 ]; then
+            echo "Some files are not properly formatted!"
+            exit 1
+          else
+            echo "✅ All files are properly formatted."
+          fi
