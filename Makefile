@@ -19,8 +19,9 @@ endif
 # ------------------------------------------------------------
 # Include directories (RECURSIVE)
 # ------------------------------------------------------------
+INC_DIR     := includes
 LIB_INCLUDES := $(shell find . -type d)
-INCLUDES     := $(addprefix -I,$(LIB_INCLUDES))
+INCLUDES     := $(addprefix -I,$(LIB_INCLUDES)) -I$(INC_DIR)
 
 # ------------------------------------------------------------
 # Compiler flags
