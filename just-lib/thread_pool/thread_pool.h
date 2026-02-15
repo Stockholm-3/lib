@@ -17,9 +17,9 @@ typedef struct ThreadPool     ThreadPool;
 typedef struct ThreadPoolTask ThreadPoolTask;
 
 /** Status codes passed to done callbacks. */
-#define TP_STATUS_OK        0
+#define TP_STATUS_OK 0
 #define TP_STATUS_CANCELLED -1
-#define TP_STATUS_TIMEOUT   -2
+#define TP_STATUS_TIMEOUT -2
 
 /**
  * Function executed in a worker thread.
@@ -87,10 +87,9 @@ void thread_pool_destroy(ThreadPool* pool);
  * @param timeout_ms Timeout in milliseconds (0 = no timeout).
  * @return Task handle, or NULL on failure (shutdown, queue full, alloc).
  */
-ThreadPoolTask* thread_pool_submit(ThreadPool* pool,
-                                   ThreadPoolWorkFunc work_fn, void* work_arg,
-                                   ThreadPoolDoneFunc done_fn, void* done_arg,
-                                   int timeout_ms);
+ThreadPoolTask* thread_pool_submit(ThreadPool* pool, ThreadPoolWorkFunc work_fn,
+                                   void* work_arg, ThreadPoolDoneFunc done_fn,
+                                   void* done_arg, int timeout_ms);
 
 /**
  * Cancel a task.

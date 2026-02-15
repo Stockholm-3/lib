@@ -23,14 +23,14 @@ static uint64_t now_monotonic_ms(void) {
 /* ============= Internal Types ============= */
 
 struct ThreadPoolTask {
-    ThreadPoolWorkFunc  work_fn;
-    void*               work_arg;
-    ThreadPoolDoneFunc  done_fn;
-    void*               done_arg;
+    ThreadPoolWorkFunc     work_fn;
+    void*                  work_arg;
+    ThreadPoolDoneFunc     done_fn;
+    void*                  done_arg;
     struct ThreadPoolTask* next;
-    volatile int        cancelled;
-    uint64_t            deadline_ms; /* 0 = no timeout */
-    int                 status;
+    volatile int           cancelled;
+    uint64_t               deadline_ms; /* 0 = no timeout */
+    int                    status;
 };
 
 typedef struct {
@@ -48,10 +48,10 @@ typedef struct {
 } CompletionQueue;
 
 struct ThreadPool {
-    pthread_t*      threads;
-    int             num_workers;
-    int             max_pending;
-    volatile int    shutdown;
+    pthread_t*   threads;
+    int          num_workers;
+    int          max_pending;
+    volatile int shutdown;
 
     WorkQueue       work;
     CompletionQueue done;
@@ -76,8 +76,7 @@ static void queue_push(ThreadPoolTask** head, ThreadPoolTask** tail,
     *tail = task;
 }
 
-static ThreadPoolTask* queue_pop(ThreadPoolTask** head,
-                                 ThreadPoolTask** tail) {
+static ThreadPoolTask* queue_pop(ThreadPoolTask** head, ThreadPoolTask** tail) {
     ThreadPoolTask* task = *head;
     if (!task) {
         return NULL;
@@ -93,8 +92,8 @@ static ThreadPoolTask* queue_pop(ThreadPoolTask** head,
 static ThreadPoolTask* queue_take_all(ThreadPoolTask** head,
                                       ThreadPoolTask** tail) {
     ThreadPoolTask* list = *head;
-    *head = NULL;
-    *tail = NULL;
+    *head                = NULL;
+    *tail                = NULL;
     return list;
 }
 
@@ -315,10 +314,9 @@ void thread_pool_destroy(ThreadPool* pool) {
     free(pool);
 }
 
-ThreadPoolTask* thread_pool_submit(ThreadPool* pool,
-                                   ThreadPoolWorkFunc work_fn, void* work_arg,
-                                   ThreadPoolDoneFunc done_fn, void* done_arg,
-                                   int timeout_ms) {
+ThreadPoolTask* thread_pool_submit(ThreadPool* pool, ThreadPoolWorkFunc work_fn,
+                                   void* work_arg, ThreadPoolDoneFunc done_fn,
+                                   void* done_arg, int timeout_ms) {
     if (!pool || pool->shutdown) {
         return NULL;
     }
