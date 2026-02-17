@@ -1,9 +1,12 @@
-#include <errno.h>
-#include <signal.h>
-#define _GNU_SOURCE
+#ifndef _GNU_SOURCE
+#    define _GNU_SOURCE
+#endif
+
 #include "scheduler.h"
 
+#include <errno.h>
 #include <poll.h>
+#include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,7 +17,7 @@
 
 /* ---------- internal ---------- */
 
-typedef enum { TIMER_INTERVAL, TIMER_DAILY } TimerType;
+typedef enum { TIMER_INTERVAL, TIMER_DAILY, TIMER_ALIGNED_UTC } TimerType;
 
 typedef struct {
     int hour;
@@ -25,9 +28,15 @@ typedef struct {
 struct SchedulerTimer {
     TimerType     type;
     TimerCallback callback;
-    uint64_t      interval_ms;  // for interval timers
-    DailyArg      daily;        // for daily timers
-    uint64_t      next_mono_ms; // absolute MONOTONIC deadline
+    uint64_t      interval_ms; // for interval timers
+
+    // aligned timer
+    uint64_t aligned_ms; /* grid size */
+    uint64_t offset_ms;  /* phase offset */
+
+    DailyArg daily; // for daily timers
+
+    uint64_t next_mono_ms; // absolute MONOTONIC deadline
 };
 
 // Return current monotonic time in milliseconds
@@ -51,6 +60,41 @@ static uint64_t realtime_sec_to_monotonic_ms(time_t rt_sec) {
     uint64_t mono_now  = mono_now_ms();
     int64_t  diff_ms   = (int64_t)(rt_sec * 1000) - (int64_t)rt_now_ms;
     return mono_now + diff_ms;
+}
+
+static uint64_t realtime_ms_to_monotonic_ms(uint64_t rt_ms) {
+    uint64_t rt_now_ms = realtime_now_ms();
+    uint64_t mono_now  = mono_now_ms();
+    int64_t  diff_ms   = (int64_t)rt_ms - (int64_t)rt_now_ms;
+    return mono_now + diff_ms;
+}
+
+static uint64_t next_aligned_utc_ms(uint64_t interval_ms, uint64_t offset_ms) {
+    uint64_t now = realtime_now_ms();
+
+    if (offset_ms >= interval_ms) {
+        offset_ms %= interval_ms;
+    }
+
+    uint64_t base;
+
+    if (now >= offset_ms) {
+        base = now - offset_ms;
+    } else {
+        base = 0;
+    }
+
+    uint64_t rem = base % interval_ms;
+
+    uint64_t delta;
+
+    if (rem == 0) {
+        delta = interval_ms;
+    } else {
+        delta = interval_ms - rem;
+    }
+
+    return now + delta;
 }
 
 // Compute next real-time fire for daily timer
@@ -104,6 +148,25 @@ SchedulerTimer* create_daily_timer(int hour, int minute, int second,
     return t;
 }
 
+SchedulerTimer* create_aligned_timer_utc(uint64_t interval_ms,
+                                         uint64_t offset_ms, TimerCallback cb) {
+    if (!cb || interval_ms == 0) {
+        return NULL;
+    }
+
+    SchedulerTimer* t = calloc(1, sizeof(*t));
+    if (!t) {
+        return NULL;
+    }
+
+    t->type       = TIMER_ALIGNED_UTC;
+    t->aligned_ms = interval_ms;
+    t->offset_ms  = offset_ms;
+    t->callback   = cb;
+
+    return t;
+}
+
 void destroy_timer(SchedulerTimer* t) { free(t); }
 
 void run_scheduler(SchedulerTimer** timers, size_t count,
@@ -114,40 +177,62 @@ void run_scheduler(SchedulerTimer** timers, size_t count,
         return;
     }
 
-    /* initialize next fire times */
-    uint64_t now_ms = mono_now_ms();
+    // initilze all timers
+    uint64_t now_mono = mono_now_ms();
+
     for (size_t i = 0; i < count; i++) {
-        if (timers[i]->type == TIMER_INTERVAL) {
-            timers[i]->next_mono_ms = now_ms + timers[i]->interval_ms;
-        } else {
-            time_t rt               = next_daily_realtime(&timers[i]->daily);
+
+        switch (timers[i]->type) {
+
+        case TIMER_INTERVAL:
+            timers[i]->next_mono_ms = now_mono + timers[i]->interval_ms;
+            break;
+
+        case TIMER_DAILY: {
+            time_t rt = next_daily_realtime(&timers[i]->daily);
+
             timers[i]->next_mono_ms = realtime_sec_to_monotonic_ms(rt);
+            break;
+        }
+
+        case TIMER_ALIGNED_UTC: {
+            uint64_t rt = next_aligned_utc_ms(timers[i]->aligned_ms,
+                                              timers[i]->offset_ms);
+
+            timers[i]->next_mono_ms = realtime_sec_to_monotonic_ms(rt / 1000);
+            break;
+        }
         }
     }
 
+    // start scheduler loop
     while (!*shutdown_flag) {
-        // find earliest deadline
+
+        /* find earliest deadline */
         uint64_t earliest = UINT64_MAX;
+
         for (size_t i = 0; i < count; i++) {
             if (timers[i]->next_mono_ms < earliest) {
                 earliest = timers[i]->next_mono_ms;
             }
         }
 
-        // calculate next time spec
-        now_ms           = mono_now_ms();
-        uint64_t wait_ms = (earliest > now_ms) ? (earliest - now_ms) : 0;
+        now_mono = mono_now_ms();
+
+        uint64_t wait_ms = (earliest > now_mono) ? (earliest - now_mono) : 0;
 
         struct itimerspec it = {0};
 
-        it.it_value.tv_sec  = (time_t)(wait_ms / 1000);
-        it.it_value.tv_nsec = (long)((wait_ms % 1000) * 1000000);
+        it.it_value.tv_sec  = wait_ms / 1000;
+        it.it_value.tv_nsec = (wait_ms % 1000) * 1000000;
 
-        timerfd_settime(tfd, 0, &it, NULL);
+        if (timerfd_settime(tfd, 0, &it, NULL) < 0) {
+            perror("timerfd_settime");
+            break;
+        }
 
         uint64_t expirations;
-
-        ssize_t n;
+        ssize_t  n;
 
         do {
             n = read(tfd, &expirations, sizeof(expirations));
@@ -162,19 +247,42 @@ void run_scheduler(SchedulerTimer** timers, size_t count,
             break;
         }
 
-        now_ms = mono_now_ms();
+        now_mono = mono_now_ms();
 
+        // fire timers
         for (size_t i = 0; i < count; i++) {
-            if (timers[i]->next_mono_ms <= now_ms) {
+
+            if (timers[i]->next_mono_ms <= now_mono) {
+
                 timers[i]->callback();
 
-                if (timers[i]->type == TIMER_INTERVAL) {
-                    timers[i]->next_mono_ms = now_ms + timers[i]->interval_ms;
-                } else {
+                /* reschedule */
+
+                switch (timers[i]->type) {
+
+                case TIMER_INTERVAL:
+                    timers[i]->next_mono_ms += timers[i]->interval_ms;
+                    break;
+                case TIMER_DAILY: {
                     time_t rt = next_daily_realtime(&timers[i]->daily);
+
                     timers[i]->next_mono_ms = realtime_sec_to_monotonic_ms(rt);
+                    break;
+                }
+                case TIMER_ALIGNED_UTC: {
+                    uint64_t last_scheduled_rt_ms = timers[i]->next_mono_ms -
+                                                    mono_now_ms() +
+                                                    realtime_now_ms();
+                    uint64_t next_rt_ms =
+                        last_scheduled_rt_ms + timers[i]->aligned_ms;
+                    timers[i]->next_mono_ms =
+                        realtime_ms_to_monotonic_ms(next_rt_ms);
+                    break;
+                }
                 }
             }
         }
     }
+
+    close(tfd);
 }
