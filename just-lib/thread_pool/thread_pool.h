@@ -21,10 +21,10 @@ typedef struct ThreadPool     ThreadPool;
 typedef struct ThreadPoolTask ThreadPoolTask;
 
 /** Status codes passed to done callbacks. */
-#define TP_STATUS_OK        0
+#define TP_STATUS_OK 0
 #define TP_STATUS_CANCELLED -1
-#define TP_STATUS_TIMEOUT   -2
-#define TP_STATUS_ERROR     -3  /**< Unexpected exception thrown by work_fn. */
+#define TP_STATUS_TIMEOUT -2
+#define TP_STATUS_ERROR -3 /**< Unexpected exception thrown by work_fn. */
 
 /**
  * Function executed in a worker thread.
@@ -49,7 +49,8 @@ typedef struct {
     int num_workers;     /**< Total worker threads. */
     int active_workers;  /**< Workers currently executing a task. */
     int pending_tasks;   /**< Tasks waiting in the work queue. */
-    int completed_tasks; /**< Total tasks processed since creation (executed + cancelled + timeout). */
+    int completed_tasks; /**< Total tasks processed since creation (executed +
+                            cancelled + timeout). */
 } ThreadPoolStats;
 
 /**
