@@ -13,13 +13,18 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct ThreadPool     ThreadPool;
 typedef struct ThreadPoolTask ThreadPoolTask;
 
 /** Status codes passed to done callbacks. */
-#define TP_STATUS_OK 0
+#define TP_STATUS_OK        0
 #define TP_STATUS_CANCELLED -1
-#define TP_STATUS_TIMEOUT -2
+#define TP_STATUS_TIMEOUT   -2
+#define TP_STATUS_ERROR     -3  /**< Unexpected exception thrown by work_fn. */
 
 /**
  * Function executed in a worker thread.
@@ -34,8 +39,8 @@ typedef int (*ThreadPoolWorkFunc)(void* arg, ThreadPoolTask* task);
  * Callback executed on the main thread after work completes.
  *
  * @param arg    User-provided done argument.
- * @param status Result: 0 = OK, >0 = work_fn error,
- *               TP_STATUS_CANCELLED or TP_STATUS_TIMEOUT.
+ * @param status Result: TP_STATUS_OK (0), >0 = work_fn error,
+ *               TP_STATUS_CANCELLED, TP_STATUS_TIMEOUT, or TP_STATUS_ERROR.
  */
 typedef void (*ThreadPoolDoneFunc)(void* arg, int status);
 
@@ -44,7 +49,7 @@ typedef struct {
     int num_workers;     /**< Total worker threads. */
     int active_workers;  /**< Workers currently executing a task. */
     int pending_tasks;   /**< Tasks waiting in the work queue. */
-    int completed_tasks; /**< Total tasks completed since creation. */
+    int completed_tasks; /**< Total tasks processed since creation (executed + cancelled + timeout). */
 } ThreadPoolStats;
 
 /**
@@ -153,5 +158,9 @@ void thread_pool_wait_idle(ThreadPool* pool);
  * @param mon_time Current monotonic time (unused).
  */
 void thread_pool_smw_callback(void* context, uint64_t mon_time);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* THREAD_POOL_H */
