@@ -1,8 +1,11 @@
+#ifndef UTILS_H
+#define UTILS_H
+
 #define POSIX_C_SOURCE 200809L
 #include <stdint.h>
 #include <time.h>
 
-uint64_t system_monotonic_ms() {
+static inline uint64_t system_monotonic_ms() {
     long   ms;
     time_t s;
 
@@ -17,3 +20,5 @@ uint64_t system_monotonic_ms() {
 
     return result;
 }
+
+#endif // UTILS_H
