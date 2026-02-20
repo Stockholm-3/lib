@@ -4,6 +4,7 @@ SHELL := bash
 # Compiler + global settings
 # ------------------------------------------------------------
 CC          := gcc
+CXX         := g++
 
 BUILD_MODE  ?= debug
 BUILD_DIR   := build/$(BUILD_MODE)
@@ -27,14 +28,17 @@ INCLUDES     := $(addprefix -I,$(LIB_INCLUDES)) -I$(INC_DIR)
 # Compiler flags
 # ------------------------------------------------------------
 CFLAGS := $(CFLAGS_BASE) -MMD -MP $(INCLUDES)
+CXXFLAGS := $(CFLAGS_BASE) -MMD -MP $(INCLUDES)
 
 # ------------------------------------------------------------
 # Source and object files
 # ------------------------------------------------------------
 LIB_FILES := $(shell find . -type f -name '*.c')
+LIB_CPP_FILES := $(shell find . -type f -name '*.cpp')
 
 OBJ_FILES := $(patsubst %.c,$(BUILD_DIR)/%.o,$(LIB_FILES))
-DEP_FILES := $(OBJ_FILES:.o=.d)
+OBJ_CPP_FILES := $(patsubst %.cpp,$(BUILD_DIR)/cpp/%.o,$(LIB_CPP_FILES))
+DEP_FILES := $(OBJ_FILES:.o=.d) $(OBJ_CPP_FILES:.o=.d)
 
 # ------------------------------------------------------------
 # Default target: compile all .c files
@@ -43,6 +47,8 @@ DEP_FILES := $(OBJ_FILES:.o=.d)
 all: $(OBJ_FILES)
 	@echo "Library compilation complete. [$(BUILD_TYPE)]"
 
+all: $(OBJ_CPP_FILES)
+
 # ------------------------------------------------------------
 # Compile rule (NO LINKING)
 # ------------------------------------------------------------
@@ -50,6 +56,11 @@ $(BUILD_DIR)/%.o: %.c
 	@echo "Compiling $< ... [$(BUILD_TYPE)]"
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/cpp/%.o: %.cpp
+	@echo "Compiling C++ $< ... [$(BUILD_TYPE)]"
+	@mkdir -p $(dir $@)
+	@$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # ------------------------------------------------------------
 # Utilities
