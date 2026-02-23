@@ -15,12 +15,11 @@
 #include <cstdio>
 #include <mutex>
 #include <new>
+#include <pthread.h> /* pthread_setname_np — Linux extension */
 #include <queue>
 #include <thread>
+#include <time.h> /* clock_gettime, CLOCK_MONOTONIC */
 #include <vector>
-
-#include <pthread.h> /* pthread_setname_np — Linux extension */
-#include <time.h>    /* clock_gettime, CLOCK_MONOTONIC */
 
 /* ============= Internal Helpers ============= */
 
@@ -34,13 +33,13 @@ static uint64_t now_monotonic_ms(void) {
 /* ============= Internal Types ============= */
 
 struct ThreadPoolTask {
-    ThreadPoolWorkFunc  work_fn;
-    void*               work_arg;
-    ThreadPoolDoneFunc  done_fn;
-    void*               done_arg;
-    std::atomic<int>    cancelled;
-    uint64_t            deadline_ms;
-    int                 status;
+    ThreadPoolWorkFunc work_fn;
+    void*              work_arg;
+    ThreadPoolDoneFunc done_fn;
+    void*              done_arg;
+    std::atomic<int>   cancelled;
+    uint64_t           deadline_ms;
+    int                status;
 
     ThreadPoolTask()
         : work_fn(NULL), work_arg(NULL), done_fn(NULL), done_arg(NULL),
@@ -73,8 +72,8 @@ struct ThreadPool {
     std::atomic<int> completed_total;
 
     ThreadPool()
-        : num_workers(0), max_pending(0), shutdown(false),
-          active_workers(0), completed_total(0) {}
+        : num_workers(0), max_pending(0), shutdown(false), active_workers(0),
+          completed_total(0) {}
 };
 
 /* ============= Worker Thread ============= */
@@ -95,8 +94,9 @@ static void worker_thread(ThreadPool* pool) {
 
             task = pool->work.tasks.front();
             pool->work.tasks.pop();
-            /* Increment under lock so wait_idle cannot observe active_workers==0
-             * in the window between dequeue and execution start. */
+            /* Increment under lock so wait_idle cannot observe
+             * active_workers==0 in the window between dequeue and execution
+             * start. */
             pool->active_workers++;
         }
 
@@ -104,7 +104,7 @@ static void worker_thread(ThreadPool* pool) {
         if (task->cancelled.load()) {
             task->status = TP_STATUS_CANCELLED;
 
-        /* Check timeout before executing */
+            /* Check timeout before executing */
         } else if (task->deadline_ms > 0 &&
                    now_monotonic_ms() > task->deadline_ms) {
             task->status = TP_STATUS_TIMEOUT;
@@ -123,7 +123,7 @@ static void worker_thread(ThreadPool* pool) {
                     now_monotonic_ms() > task->deadline_ms) {
                     task->status = TP_STATUS_TIMEOUT;
 
-                /* Check cancellation after executing */
+                    /* Check cancellation after executing */
                 } else if (task->cancelled.load() &&
                            task->status == TP_STATUS_OK) {
                     task->status = TP_STATUS_CANCELLED;
@@ -141,7 +141,8 @@ static void worker_thread(ThreadPool* pool) {
          * only after the push (and inside work.mutex), we guarantee that any
          * wakeup of wait_idle — including spurious ones — can only observe
          * active==0 after the task is already in the done queue.
-         * done.mutex is always released before work.mutex is acquired → no cycle. */
+         * done.mutex is always released before work.mutex is acquired → no
+         * cycle. */
         if (task->done_fn) {
             std::lock_guard<std::mutex> dlock(pool->done.mutex);
             pool->done.tasks.push(task);
@@ -152,8 +153,7 @@ static void worker_thread(ThreadPool* pool) {
         {
             std::lock_guard<std::mutex> wlock(pool->work.mutex);
             pool->active_workers.fetch_sub(1);
-            if (pool->active_workers.load() == 0 &&
-                pool->work.tasks.empty()) {
+            if (pool->active_workers.load() == 0 && pool->work.tasks.empty()) {
                 pool->work.idle_cond.notify_all();
             }
         }
@@ -334,7 +334,7 @@ void thread_pool_get_stats(ThreadPool* pool, ThreadPoolStats* stats) {
         return;
     }
 
-    stats->num_workers     = pool->num_workers;
+    stats->num_workers = pool->num_workers;
     /* completed_total is monotonically increasing — consistent without lock */
     stats->completed_tasks = pool->completed_total.load();
 
