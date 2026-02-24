@@ -27,23 +27,8 @@
 int send_response(HTTPServerConnection* conn, int status,
                   const char* content_type, const char* body, size_t body_len);
 
-/**
- * @brief Sends a JSON-formatted error response.
- *
- * This function builds a standardized JSON error object using the response
- * builder utilities and sends it as an HTTP response with the given status
- * code.
- *
- * The generated JSON string is freed internally after the response buffer
- * has been constructed.
- *
- * @param conn   Pointer to an active HTTPServerConnection.
- * @param status HTTP error status code.
- * @param reason Human-readable explanation of the error.
- *
- * @return 0 on success, -1 on failure.
- */
-int send_json_error(HTTPServerConnection* conn, int status, const char* reason);
+int send_json_message(HTTPServerConnection* conn, int status,
+                      const char* message);
 
 /**
  * @brief Splits a request path into path and query components.

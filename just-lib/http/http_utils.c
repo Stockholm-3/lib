@@ -21,8 +21,9 @@ int send_response(HTTPServerConnection* conn, int status,
                                status, status == 200 ? "OK" : "Error",
                                content_type, body_len);
 
+    // header formatting error or overflow
     if (header_len <= 0 || (size_t)header_len >= sizeof(header)) {
-        return -2; // header formatting error or overflow
+        return -2;
     }
 
     size_t total_len = (size_t)header_len + body_len;
@@ -37,26 +38,45 @@ int send_response(HTTPServerConnection* conn, int status,
         memcpy(resp + header_len, body, body_len);
     }
 
-    /* NEW: hand off to the official async API */
     int rc = http_server_connection_respond(conn, resp, total_len);
 
-    /* respond() copies the buffer, so we must free ours */
     free(resp);
 
     return rc;
 }
 
-int send_json_error(HTTPServerConnection* conn, int status,
-                    const char* reason) {
-    char* json = response_builder_error(
-        status, response_builder_get_error_type(status), reason);
-    if (!json) {
+int send_json_message(HTTPServerConnection* conn, int status,
+                      const char* message) {
+    if (!conn) {
         return -1;
     }
-    int ret =
-        send_response(conn, status, "application/json", json, strlen(json));
-    free(json);
-    return ret;
+
+    const char* type;
+
+    if (status >= 500) {
+        type = "server_error";
+    } else if (status >= 400) {
+        type = "client_error";
+    } else if (status >= 300) {
+        type = "redirect";
+    } else if (status >= 200) {
+        type = "success";
+    } else {
+        type = "info";
+    }
+
+    char body[1024];
+
+    int len =
+        snprintf(body, sizeof(body),
+                 "{ \"status\": %d, \"type\": \"%s\", \"message\": \"%s\" }",
+                 status, type, message ? message : "");
+
+    if (len < 0 || (size_t)len >= sizeof(body)) {
+        return -2;
+    }
+
+    return send_response(conn, status, "application/json", body, (size_t)len);
 }
 
 void split_path_and_query(const char* request_path, char* path_out,
