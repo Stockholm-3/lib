@@ -196,8 +196,6 @@ int http_client_init(const char* url, HttpClient** client_ptr,
     /* ensure all fields start zeroed to avoid undefined state */
     client->state = HTTP_CLIENT_STATE_INIT;
 
-    client->task = smw_create_task(client, http_client_work);
-
     client->callback = NULL;
     client->timer    = 0;
 
@@ -229,6 +227,13 @@ int http_client_init(const char* url, HttpClient** client_ptr,
         client->port[sizeof(client->port) - 1] = '\0';
     }
 
+    /* Task is NOT registered in SMW here; callers that want async SMW-driven
+     * operation must register explicitly (e.g. via http_client_get). Sync
+     * callers that drive the client in their own loop must not appear in the
+     * global SMW task list or two threads will race on the same state machine.
+     */
+    client->task = NULL;
+
     *(client_ptr) = client;
 
     return 0;
@@ -255,6 +260,12 @@ int http_client_get(const char* url, const char* port, uint64_t timeout,
     client->timeout  = timeout;
     client->callback = callback;
     client->context  = context;
+
+    /* Register in SMW so the main-thread event loop drives this client.
+     * This is safe because http_client_get is called from request-handler
+     * threads, never from compute threads that already run their own loop.
+     */
+    client->task = smw_create_task(client, http_client_work);
 
     return 0;
 }
@@ -508,15 +519,7 @@ HttpClientState http_client_work_reading(HttpClient* client) {
                                      sizeof(chunk_buffer));
     }
 
-    if (bytes_read < 0) {
-        if (client->callback) {
-            client->callback("ERROR", "Read failed", client->context);
-        }
-        return HTTP_CLIENT_STATE_DISPOSE;
-    } else if (bytes_read == 0) {
-        /* No data available right now (non-blocking). Try again later. */
-        return HTTP_CLIENT_STATE_READING;
-    } else if (bytes_read == -2) {
+    if (bytes_read == -2) {
         /* EOF from peer: treat as end-of-stream */
         if (client->body_start > 0) {
             size_t remaining =
@@ -559,6 +562,14 @@ HttpClientState http_client_work_reading(HttpClient* client) {
 
         /* No headers parsed yet but connection closed - nothing to do */
         return HTTP_CLIENT_STATE_DISPOSE;
+    } else if (bytes_read < 0) {
+        if (client->callback) {
+            client->callback("ERROR", "Read failed", client->context);
+        }
+        return HTTP_CLIENT_STATE_DISPOSE;
+    } else if (bytes_read == 0) {
+        /* No data available right now (non-blocking). Try again later. */
+        return HTTP_CLIENT_STATE_READING;
     }
 
     // Grow buffer

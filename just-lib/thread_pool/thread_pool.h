@@ -95,7 +95,8 @@ void thread_pool_destroy(ThreadPool* pool);
  */
 ThreadPoolTask* thread_pool_submit(ThreadPool* pool, ThreadPoolWorkFunc work_fn,
                                    void* work_arg, ThreadPoolDoneFunc done_fn,
-                                   void* done_arg, int timeout_ms);
+                                   void* done_arg, int timeout_ms,
+                                   int priority);
 
 /**
  * Cancel a task.

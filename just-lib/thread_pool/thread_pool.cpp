@@ -40,14 +40,16 @@ struct ThreadPoolTask {
     std::atomic<int>   cancelled;
     uint64_t           deadline_ms;
     int                status;
+    int                priority;
 
     ThreadPoolTask()
         : work_fn(NULL), work_arg(NULL), done_fn(NULL), done_arg(NULL),
-          cancelled(0), deadline_ms(0), status(0) {}
+          cancelled(0), deadline_ms(0), status(0), priority(0) {}
 };
 
 struct WorkQueue {
-    std::queue<ThreadPoolTask*> tasks;
+    std::queue<ThreadPoolTask*> high; /* priority >= 0 */
+    std::queue<ThreadPoolTask*> low;  /* priority <  0 */
     std::mutex                  mutex;
     std::condition_variable     cond;
     std::condition_variable     idle_cond; /* shares mutex with cond */
@@ -85,15 +87,22 @@ static void worker_thread(ThreadPool* pool) {
         {
             std::unique_lock<std::mutex> lock(pool->work.mutex);
             pool->work.cond.wait(lock, [pool] {
-                return !pool->work.tasks.empty() || pool->shutdown.load();
+                return !pool->work.high.empty() || !pool->work.low.empty()
+                       || pool->shutdown.load();
             });
 
-            if (pool->shutdown.load() && pool->work.tasks.empty()) {
+            if (pool->shutdown.load() && pool->work.high.empty() &&
+                pool->work.low.empty()) {
                 return;
             }
 
-            task = pool->work.tasks.front();
-            pool->work.tasks.pop();
+            if (!pool->work.high.empty()) {
+                task = pool->work.high.front();
+                pool->work.high.pop();
+            } else {
+                task = pool->work.low.front();
+                pool->work.low.pop();
+            }
             /* Increment under lock so wait_idle cannot observe
              * active_workers==0 in the window between dequeue and execution
              * start. */
@@ -153,7 +162,8 @@ static void worker_thread(ThreadPool* pool) {
         {
             std::lock_guard<std::mutex> wlock(pool->work.mutex);
             pool->active_workers.fetch_sub(1);
-            if (pool->active_workers.load() == 0 && pool->work.tasks.empty()) {
+            if (pool->active_workers.load() == 0 && pool->work.high.empty() &&
+                pool->work.low.empty()) {
                 pool->work.idle_cond.notify_all();
             }
         }
@@ -225,9 +235,13 @@ void thread_pool_destroy(ThreadPool* pool) {
     }
 
     /* Free remaining work queue tasks */
-    while (!pool->work.tasks.empty()) {
-        delete pool->work.tasks.front();
-        pool->work.tasks.pop();
+    while (!pool->work.high.empty()) {
+        delete pool->work.high.front();
+        pool->work.high.pop();
+    }
+    while (!pool->work.low.empty()) {
+        delete pool->work.low.front();
+        pool->work.low.pop();
     }
 
     /* Free remaining completion queue tasks */
@@ -241,7 +255,8 @@ void thread_pool_destroy(ThreadPool* pool) {
 
 ThreadPoolTask* thread_pool_submit(ThreadPool* pool, ThreadPoolWorkFunc work_fn,
                                    void* work_arg, ThreadPoolDoneFunc done_fn,
-                                   void* done_arg, int timeout_ms) {
+                                   void* done_arg, int timeout_ms,
+                                   int priority) {
     if (!pool) {
         return NULL;
     }
@@ -271,12 +286,18 @@ ThreadPoolTask* thread_pool_submit(ThreadPool* pool, ThreadPoolWorkFunc work_fn,
 
     /* Backpressure: reject if queue is full */
     if (pool->max_pending > 0 &&
-        static_cast<int>(pool->work.tasks.size()) >= pool->max_pending) {
+        static_cast<int>(pool->work.high.size() + pool->work.low.size()) >=
+            pool->max_pending) {
         delete task;
         return NULL;
     }
 
-    pool->work.tasks.push(task);
+    task->priority = priority;
+    if (priority >= 0) {
+        pool->work.high.push(task);
+    } else {
+        pool->work.low.push(task);
+    }
     pool->work.cond.notify_one();
     return task;
 }
@@ -343,7 +364,8 @@ void thread_pool_get_stats(ThreadPool* pool, ThreadPoolStats* stats) {
      * during dequeue, preventing active=0,pending=0 while a task is running */
     std::lock_guard<std::mutex> lock(pool->work.mutex);
     stats->active_workers = pool->active_workers.load();
-    stats->pending_tasks  = static_cast<int>(pool->work.tasks.size());
+    stats->pending_tasks  = static_cast<int>(pool->work.high.size() +
+                                              pool->work.low.size());
 }
 
 void thread_pool_wait_idle(ThreadPool* pool) {
@@ -354,7 +376,8 @@ void thread_pool_wait_idle(ThreadPool* pool) {
     /* idle_cond shares work.mutex — no nested lock required */
     std::unique_lock<std::mutex> lock(pool->work.mutex);
     pool->work.idle_cond.wait(lock, [pool] {
-        return pool->active_workers.load() == 0 && pool->work.tasks.empty();
+        return pool->active_workers.load() == 0 && pool->work.high.empty() &&
+               pool->work.low.empty();
     });
 }
 
