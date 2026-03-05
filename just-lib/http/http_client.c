@@ -740,51 +740,19 @@ HttpClientState http_client_work_reading(HttpClient* client) {
 }
 
 HttpClientState http_client_work_done(HttpClient* client) {
+
     if (client->callback != NULL) {
         if (client->status_code >= 200 && client->status_code < 300) {
-            // Success response
             client->callback("RESPONSE",
                              client->body ? (char*)client->body : "",
                              client->context);
         } else {
-            // Error response
             char error_info[256];
             snprintf(error_info, sizeof(error_info), "HTTP %d: %s",
                      client->status_code,
                      client->body ? (char*)client->body : "");
+
             client->callback("ERROR", error_info, client->context);
-        }
-    }
-
-    // Clean up resources
-    if (client->read_buffer) {
-        free(client->read_buffer);
-        client->read_buffer = NULL;
-    }
-
-    if (client->body) {
-        free(client->body);
-        client->body = NULL;
-    }
-
-    if (client->write_buffer) {
-        free(client->write_buffer);
-        client->write_buffer = NULL;
-    }
-
-    // Close connection (TCP or TLS)
-    if (client->is_https) {
-        if (client->tls_conn) {
-            tls_client_disconnect(client->tls_conn);
-            tls_client_dispose(client->tls_conn);
-            free(client->tls_conn);
-            client->tls_conn = NULL;
-        }
-    } else {
-        if (client->tcp_conn) {
-            tcp_client_disconnect(client->tcp_conn);
-            free(client->tcp_conn);
-            client->tcp_conn = NULL;
         }
     }
 
@@ -794,6 +762,10 @@ HttpClientState http_client_work_done(HttpClient* client) {
 void http_client_work(void* context, uint64_t mon_time) {
     HttpClient* client = (HttpClient*)context;
 
+    if (!client) {
+        return;
+    }
+
     if (client->timer == 0) {
         client->timer = mon_time;
     } else if (mon_time >= client->timer + client->timeout) {
@@ -801,7 +773,14 @@ void http_client_work(void* context, uint64_t mon_time) {
             client->callback("TIMEOUT", NULL, client->context);
         }
 
-        http_client_dispose(&client);
+        // Mark as disposed
+        HttpClient* tmp = client;
+        client          = NULL; // prevent any further use in this function
+        http_client_dispose(&tmp);
+        return;
+    }
+
+    if (!client) {
         return;
     }
 
@@ -835,45 +814,45 @@ void http_client_work(void* context, uint64_t mon_time) {
         break;
 
     case HTTP_CLIENT_STATE_DISPOSE:
-        http_client_dispose(&client);
+        // Only dispose if not NULL
+        if (client) {
+            HttpClient* tmp = client;
+            client          = NULL;
+            http_client_dispose(&tmp);
+        }
         break;
     }
 }
 
 void http_client_dispose(HttpClient** client_ptr) {
-    if (client_ptr == NULL || *(client_ptr) == NULL) {
+    if (!client_ptr || !*client_ptr) {
         return;
     }
 
-    HttpClient* client = *(client_ptr);
+    HttpClient* client = *client_ptr;
 
-    if (client->task != NULL) {
+    if (client->task) {
         smw_destroy_task(client->task);
+        client->task = NULL;
     }
 
-    // Clean up connection if still open
     if (client->is_https && client->tls_conn) {
         tls_client_dispose(client->tls_conn);
         free(client->tls_conn);
+        client->tls_conn = NULL;
     } else if (!client->is_https && client->tcp_conn) {
         tcp_client_disconnect(client->tcp_conn);
         free(client->tcp_conn);
+        client->tcp_conn = NULL;
     }
 
-    // Clean up buffers
-    if (client->read_buffer) {
-        free(client->read_buffer);
-    }
-    if (client->body) {
-        free(client->body);
-    }
-    if (client->write_buffer) {
-        free(client->write_buffer);
-    }
+    free(client->read_buffer);
+    free(client->body);
+    free(client->write_buffer);
 
     free(client);
 
-    *(client_ptr) = NULL;
+    *client_ptr = NULL;
 }
 
 /**
