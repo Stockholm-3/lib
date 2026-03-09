@@ -1,14 +1,25 @@
 /**
  * @file http_server_connection.h
- * @brief HTTP server connection handler with asynchronous request processing
+ * @brief HTTP/1.x server connection handler with asynchronous request
+ * processing
  *
- * This module provides a state-machine-based HTTP server connection handler
- * that processes HTTP requests asynchronously. It reads HTTP headers and body,
- * parses the request, and allows the application to send responses via
- * callbacks.
+ * Implements a state-machine-based HTTP server connection that processes
+ * requests asynchronously via smw task callbacks. Each connection progresses
+ * through the following states:
  *
- * The OnRequest callback is invoked when a full request is ready.
- * The application must call http_server_connection_respond() to send data.
+ *   INIT -> RECEIVE_HEADERS -> RECEIVE_BODY -> WAIT_RESPONSE -> SEND -> DISPOSE
+ *
+ * RECEIVE_BODY is skipped when Content-Length is 0.
+ *
+ * The application is notified via the OnRequest callback once a complete
+ * request has been received. It must call http_server_connection_respond()
+ * from within or after that callback to send a response. The connection is
+ * automatically disposed after the response is fully sent, or on timeout/error.
+ *
+ * Timeouts:
+ *   - Hard lifetime:  TIMEOUT_MS     from connection start
+ *   - Idle:           IDLE_TIMEOUT_MS since last TCP read/write activity
+ *   Both are enforced in the task loop and trigger immediate disposal.
  */
 
 #ifndef HTTP_SERVER_CONNECTION_H
@@ -20,174 +31,169 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/**
- * @def CHUNK_SIZE
- * @brief Maximum number of bytes to read from TCP socket per iteration
- */
+/** Maximum bytes read from the TCP socket per task tick */
 #define CHUNK_SIZE 256
 
-/**
- * @def METHOD_MAX_LEN
- * @brief Maximum length of HTTP method string (e.g., "GET", "POST")
- */
+/** Maximum length of the HTTP method string (e.g. "OPTIONS\0") */
 #define METHOD_MAX_LEN 9
 
-/**
- * @def REQUEST_PATH_MAX_LEN
- * @brief Maximum length of HTTP request path/URI
- */
+/** Maximum length of the HTTP request path/URI */
 #define REQUEST_PATH_MAX_LEN 256
 
-/**
- * @def HOST_MAX_LEN
- * @brief Maximum length of Host header value
- */
+/** Maximum length of the Host header value */
 #define HOST_MAX_LEN 256
 
 /**
- * @def TIMEOUT_MS
- * @brief Hard connection lifetime timeout in milliseconds (10 seconds)
- *
- * If a connection doesn't complete within this time from start_time,
- * it will be automatically disposed.
+ * Hard connection lifetime limit in milliseconds.
+ * The connection is disposed if this elapses from the moment it was initiated,
+ * regardless of activity.
  */
 #define TIMEOUT_MS 10000
 
 /**
- * @typedef HttpServerConnectionOnRequest
- * @brief Callback function type for handling HTTP requests
+ * Idle timeout in milliseconds.
+ * The connection is disposed if no TCP read or write activity occurs within
+ * this window. This catches stalled clients and slow application handlers
+ * stuck in WAIT_RESPONSE.
+ */
+#define IDLE_TIMEOUT_MS 5000
+
+/**
+ * @brief Callback invoked when a complete HTTP request has been received.
  *
- * This callback is invoked when a complete HTTP request has been received
- * and parsed. The application should use this callback to generate a response
- * by calling http_server_connection_respond().
+ * The application must call http_server_connection_respond() before or after
+ * this callback returns to provide a response. If no response is set within
+ * IDLE_TIMEOUT_MS of inactivity, the connection will be disposed.
  *
- * @param context User-provided context pointer set via
- *                http_server_connection_set_callback()
+ * @param context  User-provided pointer supplied to
+ * http_server_connection_set_callback()
  */
 typedef int (*HttpServerConnectionOnRequest)(void* context);
 
 /**
- * @enum HttpServerConnectionState
- * @brief State machine states for HTTP connection processing
- *
- * INIT -> RECEIVE_HEADERS -> RECEIVE_BODY -> WAIT_RESPONSE -> SEND -> DISPOSE
+ * @brief State machine states for an HTTP server connection.
  */
 typedef enum {
-    /** Initial state, sets start time and transitions to RECEIVE_HEADERS */
     HTTP_SERVER_CONNECTION_STATE_INIT,
-
-    /** Reading and parsing HTTP request headers */
     HTTP_SERVER_CONNECTION_STATE_RECEIVE_HEADERS,
-
-    /** Reading HTTP request body (if Content-Length > 0) */
     HTTP_SERVER_CONNECTION_STATE_RECEIVE_BODY,
-
-    /** Waiting for user to call http_server_connection_respond() */
     HTTP_SERVER_CONNECTION_STATE_WAIT_RESPONSE,
-
-    /** Sending HTTP response to client */
     HTTP_SERVER_CONNECTION_STATE_SEND,
-
-    /** Final state, cleanup and disposal of connection resources */
     HTTP_SERVER_CONNECTION_STATE_DISPOSE,
 } HttpServerConnectionState;
 
 /**
- * @struct HTTPServerConnection
- * @brief HTTP server connection context and state
+ * @brief HTTP server connection context.
  *
- * Contains all state needed to handle an HTTP connection including the
- * TCP socket, parsed request data, response buffers, and state machine info.
+ * All fields are managed internally. Callers should treat this as opaque
+ * and interact only via the public API functions.
  */
 typedef struct {
-    /** Underlying TCP client connection */
-    TCPClient tcpClient;
-
-    /** Task handle for asynchronous processing */
-    SmwTask* task;
-
-    /** Current state in the connection state machine */
-    HttpServerConnectionState state;
-
-    /** User-provided context pointer passed to callbacks */
-    void* context;
-
-    /** Callback function invoked when request is complete */
+    TCPClient                     tcpClient;
+    SmwTask*                      task;
+    HttpServerConnectionState     state;
+    void*                         context;
     HttpServerConnectionOnRequest onRequest;
 
-    /** Start time (monotonic ms) for hard lifetime timeout */
     uint64_t start_time;
-
-    /** Last activity time (monotonic ms) for idle timeout */
     uint64_t last_activity_time;
 
-    /** HTTP method string (e.g., "GET", "POST") - dynamically allocated */
+    /** Parsed HTTP method — heap allocated, NULL until headers are parsed */
     char* method;
 
-    /** HTTP request path/URI - dynamically allocated */
+    /** Parsed request path/URI — heap allocated, NULL until headers are parsed
+     */
     char* request_path;
 
-    /** Host header value - dynamically allocated */
+    /** Parsed Host header value — heap allocated, NULL until headers are parsed
+     */
     char* host;
 
-    /** Content-Length header value, 0 if no body */
+    /** Content-Length value from headers; 0 if no body */
     size_t content_len;
 
-    /** Buffer holding all received data (headers + body) */
+    /** Accumulation buffer for incoming TCP data (headers + body) */
     uint8_t* read_buffer;
+    size_t   read_buffer_size;
 
-    /** Current size of read_buffer in bytes */
-    size_t read_buffer_size;
-
-    /** Extracted request body - dynamically allocated */
-    uint8_t* body;
-
-    /** Byte offset in read_buffer where body starts (after \r\n\r\n) */
+    /** Offset into read_buffer where the body starts (after the \r\n\r\n) */
     size_t body_start;
 
-    /** Response buffer to send to client */
+    /** Extracted request body — heap allocated, NULL if no body */
+    uint8_t* body;
+
+    /** Response buffer populated by http_server_connection_respond() */
     uint8_t* write_buffer;
-
-    /** Total size of write_buffer in bytes */
-    size_t write_size;
-
-    /** Number of bytes already sent from write_buffer */
-    size_t write_offset;
+    size_t   write_size;
+    size_t   write_offset;
 } HTTPServerConnection;
 
 /**
- * @brief Initialize an HTTP server connection from an accepted socket
+ * @brief Initialise a connection from an accepted socket file descriptor.
+ *
+ * The connection begins processing immediately on the next smw tick.
+ *
+ * @param connection  Caller-allocated connection struct to initialise.
+ * @param fd          Accepted TCP socket file descriptor.
+ * @return 0 on success, negative on error.
  */
 int http_server_connection_initiate(HTTPServerConnection* connection, int fd);
 
 /**
- * @brief Initialize an HTTP server connection with dynamic allocation
+ * @brief Allocate and initialise a connection from an accepted socket.
+ *
+ * Equivalent to malloc + http_server_connection_initiate(). On success,
+ * *connection_ptr is set to the allocated connection. The caller is
+ * responsible for eventual disposal via http_server_connection_dispose_ptr().
+ *
+ * @param fd              Accepted TCP socket file descriptor.
+ * @param connection_ptr  Output parameter for the allocated connection.
+ * @return 0 on success, negative on error.
  */
 int http_server_connection_initiate_ptr(int                    fd,
                                         HTTPServerConnection** connection_ptr);
 
 /**
- * @brief Set the request callback and user context for the connection
+ * @brief Register the request callback and user context.
+ *
+ * Must be called before the first smw tick processes this connection.
+ *
+ * @param connection  Target connection.
+ * @param context     Opaque pointer passed to on_request.
+ * @param on_request  Callback invoked when a full request is ready.
  */
 void http_server_connection_set_callback(
     HTTPServerConnection* connection, void* context,
     HttpServerConnectionOnRequest on_request);
 
 /**
- * @brief Send a response to the client
+ * @brief Provide a response buffer to send to the client.
  *
- * Must be called from within or after the OnRequest callback.
+ * Must be called from within or after the OnRequest callback, and only
+ * while the connection is in the WAIT_RESPONSE state. The data is copied
+ * internally; the caller may free its buffer immediately after this returns.
+ *
+ * @param connection  Target connection.
+ * @param data        Response bytes (e.g. a full HTTP response).
+ * @param len         Number of bytes in data.
+ * @return 0 on success, negative on error.
  */
 int http_server_connection_respond(HTTPServerConnection* connection,
                                    const void* data, size_t len);
 
 /**
- * @brief Dispose of connection resources and stop the task
+ * @brief Dispose of connection resources and remove its smw task.
+ *
+ * Safe to call on a zero-initialised or already-disposed connection.
+ * After this returns the struct is zeroed and must not be used again
+ * unless re-initialised.
  */
 void http_server_connection_dispose(HTTPServerConnection* connection);
 
 /**
- * @brief Dispose of connection and free the connection structure itself
+ * @brief Dispose of the connection and free the heap-allocated struct.
+ *
+ * Sets *connection_ptr to NULL on return.
  */
 void http_server_connection_dispose_ptr(HTTPServerConnection** connection_ptr);
 
