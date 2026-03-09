@@ -87,8 +87,8 @@ static void worker_thread(ThreadPool* pool) {
         {
             std::unique_lock<std::mutex> lock(pool->work.mutex);
             pool->work.cond.wait(lock, [pool] {
-                return !pool->work.high.empty() || !pool->work.low.empty()
-                       || pool->shutdown.load();
+                return !pool->work.high.empty() || !pool->work.low.empty() ||
+                       pool->shutdown.load();
             });
 
             if (pool->shutdown.load() && pool->work.high.empty() &&
@@ -364,8 +364,8 @@ void thread_pool_get_stats(ThreadPool* pool, ThreadPoolStats* stats) {
      * during dequeue, preventing active=0,pending=0 while a task is running */
     std::lock_guard<std::mutex> lock(pool->work.mutex);
     stats->active_workers = pool->active_workers.load();
-    stats->pending_tasks  = static_cast<int>(pool->work.high.size() +
-                                              pool->work.low.size());
+    stats->pending_tasks =
+        static_cast<int>(pool->work.high.size() + pool->work.low.size());
 }
 
 void thread_pool_wait_idle(ThreadPool* pool) {

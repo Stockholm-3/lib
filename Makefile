@@ -66,23 +66,24 @@ clean:
 .PHONY: format
 format:
 	@echo "Checking formatting..."
-	@unformatted=$$(find . \( -name '*.c' -o -name '*.h' \) -print0 | \
+	@unformatted=$$(find . \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.hpp' \) -print0 | \
 		xargs -0 clang-format -style=file -output-replacements-xml | \
 		grep -c "<replacement " || true); \
 	if [ $$unformatted -ne 0 ]; then \
 		echo "$$unformatted file(s) need formatting"; \
-		find . \( -name '*.c' -o -name '*.h' \) -print0 | \
+		find . \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.hpp' \) -print0 | \
 		xargs -0 clang-format -style=file -n -Werror; \
 		exit 1; \
 	else \
 		echo "All files properly formatted"; \
 	fi
+
 # Actually fixes formatting
-#
 .PHONY: format-fix
 format-fix:
 	@echo "Applying clang-format..."
-	find . \( -name '*.c' -o -name '*.h' \) -print0 | xargs -0 clang-format -i -style=file
+	find . \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.hpp' \) -print0 | \
+		xargs -0 clang-format -i -style=file
 	@echo "Formatting applied."
 
 .PHONY: lint
