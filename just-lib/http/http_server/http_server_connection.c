@@ -1,6 +1,6 @@
 #include "http_server_connection.h"
 
-#include "../logger/logger.h"
+#include "logger.h"
 
 #include <errno.h>
 #include <stddef.h>
