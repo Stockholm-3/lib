@@ -1,5 +1,7 @@
 #include "http_server_connection.h"
 
+#include "logger.h"
+
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -9,6 +11,8 @@
 
 #define MAX_HEADER_SIZE 8192
 #define MAX_BODY_SIZE (10 * 1024 * 1024)
+
+#define MODULE "http_conn"
 
 static void task_work(void* context, uint64_t mon_time);
 
@@ -29,8 +33,10 @@ int http_server_connection_initiate(HTTPServerConnection* connection, int fd) {
     connection->task  = smw_create_task(connection, task_work);
     if (!connection->task) {
         tcp_client_dispose(&connection->tcpClient);
+        LOG_ERROR(MODULE, "fd=%d failed to create smw task", fd);
         return -1;
     }
+    LOG_DEBUG(MODULE, "fd=%d connection initiated", fd);
     return 0;
 }
 
@@ -82,6 +88,9 @@ int http_server_connection_respond(HTTPServerConnection* connection,
     connection->write_offset = 0;
     connection->state        = HTTP_SERVER_CONNECTION_STATE_SEND;
 
+    LOG_DEBUG(MODULE, "%s %s response queued (%zu bytes)", connection->method,
+              connection->request_path, len);
+
     return 0;
 }
 
@@ -90,6 +99,10 @@ void http_server_connection_dispose(HTTPServerConnection* connection) {
         // task == NULL means already disposed or never fully initialised
         return;
     }
+
+    LOG_DEBUG(MODULE, "%s %s connection disposed",
+              connection->method ? connection->method : "-",
+              connection->request_path ? connection->request_path : "-");
 
     // smw_work saves the next node pointer before invoking each callback, so
     // destroying the task from within the task callback is safe — the list
@@ -116,10 +129,12 @@ static int read_chunk(HTTPServerConnection* c, uint64_t mon_time) {
     int     n = tcp_client_read(&c->tcpClient, tmp, sizeof(tmp));
 
     if (n < 0) {
+        LOG_WARN(MODULE, "tcp read error: %s", strerror(errno));
         return -1;
     }
     if (n == 0) {
         // Peer closed the connection (EOF)
+        LOG_DEBUG(MODULE, "peer closed connection (EOF)");
         return -1;
     }
 
@@ -130,6 +145,8 @@ static int read_chunk(HTTPServerConnection* c, uint64_t mon_time) {
 
     size_t new_size = c->read_buffer_size + (size_t)n;
     if (new_size > max_size) {
+        LOG_WARN(MODULE, "read buffer limit exceeded (%zu > %zu)", new_size,
+                 max_size);
         return -2;
     }
 
@@ -186,11 +203,15 @@ static int parse_headers(HTTPServerConnection* c) {
         int parsed = sscanf(raw, "%7s %255s %15s", method, path, version);
 
         if (parsed < 2 || !validate_method(method) || !validate_path(path)) {
+            LOG_WARN(MODULE,
+                     "malformed request line (parsed=%d method='%s' path='%s')",
+                     parsed, method, path);
             free(raw);
             return -1;
         }
 
         if (parsed >= 3 && strncmp(version, "HTTP/", 5) != 0) {
+            LOG_WARN(MODULE, "unrecognised HTTP version '%s'", version);
             free(raw);
             return -1;
         }
@@ -204,6 +225,7 @@ static int parse_headers(HTTPServerConnection* c) {
         if (cl_hdr) {
             if (sscanf(cl_hdr, "Content-Length: %zu", &content_len) != 1 ||
                 content_len > MAX_BODY_SIZE) {
+                LOG_WARN(MODULE, "invalid or oversized Content-Length");
                 free(raw);
                 return -1;
             }
@@ -230,6 +252,9 @@ static int parse_headers(HTTPServerConnection* c) {
         c->content_len  = content_len;
         c->body_start   = header_end;
 
+        LOG_DEBUG(MODULE, "%s %s host='%s' content-length=%zu", method, path,
+                  host, content_len);
+
         return 1;
     }
 
@@ -250,6 +275,7 @@ static int extract_body(HTTPServerConnection* c) {
 }
 
 static void fire_request(HTTPServerConnection* c) {
+    LOG_INFO(MODULE, "%s %s", c->method, c->request_path);
     c->state = HTTP_SERVER_CONNECTION_STATE_WAIT_RESPONSE;
     c->onRequest(c->context);
 }
@@ -317,6 +343,8 @@ static int state_send(HTTPServerConnection* c, uint64_t mon_time) {
         c->last_activity_time = mon_time;
     } else if (sent < 0) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            LOG_WARN(MODULE, "%s %s send error: %s", c->method, c->request_path,
+                     strerror(errno));
             c->state = HTTP_SERVER_CONNECTION_STATE_DISPOSE;
             return -1;
         }
@@ -340,11 +368,19 @@ static void task_work(void* context, uint64_t mon_time) {
     }
 
     if (mon_time - c->start_time >= TIMEOUT_MS) {
+        LOG_WARN(MODULE, "%s %s hard timeout exceeded (%llu ms)",
+                 c->method ? c->method : "-",
+                 c->request_path ? c->request_path : "-",
+                 (unsigned long long)(mon_time - c->start_time));
         c->state = HTTP_SERVER_CONNECTION_STATE_DISPOSE;
     }
 
     if (c->state != HTTP_SERVER_CONNECTION_STATE_DISPOSE &&
         mon_time - c->last_activity_time >= IDLE_TIMEOUT_MS) {
+        LOG_WARN(MODULE, "%s %s idle timeout exceeded (%llu ms)",
+                 c->method ? c->method : "-",
+                 c->request_path ? c->request_path : "-",
+                 (unsigned long long)(mon_time - c->last_activity_time));
         c->state = HTTP_SERVER_CONNECTION_STATE_DISPOSE;
     }
 
