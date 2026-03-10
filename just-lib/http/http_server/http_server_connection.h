@@ -92,6 +92,7 @@ typedef struct {
     TCPClient                     tcpClient;
     SmwTask*                      task;
     HttpServerConnectionState     state;
+    uint8_t                       heap_allocated;
     void*                         context;
     HttpServerConnectionOnRequest onRequest;
 

@@ -184,9 +184,7 @@ static void rs_lock(RegTask* t) {
             return;
         }
         t->state = RS_ERROR;
-        {
-            return;
-        }
+        { return; }
     }
     t->state = RS_READ;
 }

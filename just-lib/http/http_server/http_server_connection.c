@@ -54,7 +54,8 @@ int http_server_connection_initiate_ptr(int                    fd,
         free(c);
         return result;
     }
-    *connection_ptr = c;
+    c->heap_allocated = 1;
+    *connection_ptr   = c;
     return 0;
 }
 
@@ -397,7 +398,11 @@ static void task_work(void* context, uint64_t mon_time) {
         state_send(c, mon_time);
         break;
     case HTTP_SERVER_CONNECTION_STATE_DISPOSE:
-        http_server_connection_dispose(c);
+        if (c->heap_allocated) {
+            http_server_connection_dispose_ptr(&c);
+        } else {
+            http_server_connection_dispose(c);
+        }
         break;
     case HTTP_SERVER_CONNECTION_STATE_INIT:
         break;
