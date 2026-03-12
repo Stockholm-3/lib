@@ -179,6 +179,25 @@ int http_client_get(const char* url, const char* port, uint64_t timeout,
                     HttpClientCallback callback, void* context);
 
 /**
+ * @brief Perform a synchronous HTTP/HTTPS GET request.
+ *
+ * Blocks until the response is received, an error occurs, or the
+ * timeout expires.  Drives the same state machine as the async path,
+ * so all transport/TLS/chunked-decoding behaviour is identical.
+ *
+ * @param url      URL to fetch (http:// or https://).
+ * @param port     Optional port override (NULL for scheme default).
+ * @param timeout  Timeout in scheduler ticks (passed to the state machine).
+ * @param status   Output: HTTP status code (e.g. 200).  May be NULL.
+ *
+ * @return Heap-allocated, NUL-terminated response body on success,
+ *         NULL on error or timeout.  The caller is responsible for
+ *         calling free() on the returned pointer.
+ */
+char* http_client_get_sync(const char* url, const char* port, uint64_t timeout,
+                           int* status);
+
+/**
  * @brief Scheduler-driven HTTP client state machine.
  *
  * Advances the client through its lifecycle and handles timeout detection.

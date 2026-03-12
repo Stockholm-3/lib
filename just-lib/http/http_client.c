@@ -855,6 +855,74 @@ void http_client_dispose(HttpClient** client_ptr) {
     *client_ptr = NULL;
 }
 
+char* http_client_get_sync(const char* url, const char* port, uint64_t timeout,
+                           int* status) {
+    HttpClient* client = NULL;
+    if (http_client_init(url, &client, port) != 0) {
+        return NULL;
+    }
+
+    client->task    = NULL;
+    client->timeout = timeout;
+
+    uint64_t tick = 0;
+
+    while (client->state != HTTP_CLIENT_STATE_DISPOSE) {
+
+        if (client->timer == 0) {
+            client->timer = tick;
+        } else if (tick >= client->timer + client->timeout) {
+            http_client_dispose(&client);
+            return NULL;
+        }
+
+        switch (client->state) {
+        case HTTP_CLIENT_STATE_INIT:
+            client->state = http_client_work_init(client);
+            break;
+        case HTTP_CLIENT_STATE_CONNECT:
+            client->state = http_client_work_connect(client);
+            break;
+        case HTTP_CLIENT_STATE_CONNECTING:
+            client->state = http_client_work_connecting(client);
+            break;
+        case HTTP_CLIENT_STATE_TLS_HANDSHAKE:
+            client->state = http_client_work_tls_handshake(client);
+            break;
+        case HTTP_CLIENT_STATE_WRITING:
+            client->state = http_client_work_writing(client);
+            break;
+        case HTTP_CLIENT_STATE_READING:
+            client->state = http_client_work_reading(client);
+            break;
+        case HTTP_CLIENT_STATE_DONE:
+            client->state = http_client_work_done(client);
+            break;
+        case HTTP_CLIENT_STATE_DISPOSE:
+            break;
+        }
+
+        tick++;
+    }
+
+    char* body  = NULL;
+    int   scode = 0;
+
+    if (client) {
+        body         = (char*)client->body;
+        scode        = client->status_code;
+        client->body = NULL;
+
+        http_client_dispose(&client);
+    }
+
+    if (status) {
+        *status = scode;
+    }
+
+    return body;
+}
+
 /**
  * @brief Parse an HTTP or HTTPS URL.
  *
