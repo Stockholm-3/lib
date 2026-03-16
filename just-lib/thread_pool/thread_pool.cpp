@@ -13,12 +13,14 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <fcntl.h>
 #include <mutex>
 #include <new>
 #include <pthread.h> /* pthread_setname_np — Linux extension */
 #include <queue>
 #include <thread>
 #include <time.h> /* clock_gettime, CLOCK_MONOTONIC */
+#include <unistd.h>
 #include <vector>
 
 /* ============= Internal Helpers ============= */
@@ -73,9 +75,15 @@ struct ThreadPool {
     std::atomic<int> active_workers;
     std::atomic<int> completed_total;
 
+    /* Self-pipe: worker writes [1] when a done callback is queued;
+     * main thread registers [0] with epoll to wake without polling. */
+    int notify_pipe[2];
+
     ThreadPool()
         : num_workers(0), max_pending(0), shutdown(false), active_workers(0),
-          completed_total(0) {}
+          completed_total(0) {
+        notify_pipe[0] = notify_pipe[1] = -1;
+    }
 };
 
 /* ============= Worker Thread ============= */
@@ -153,8 +161,13 @@ static void worker_thread(ThreadPool* pool) {
          * done.mutex is always released before work.mutex is acquired → no
          * cycle. */
         if (task->done_fn) {
-            std::lock_guard<std::mutex> dlock(pool->done.mutex);
-            pool->done.tasks.push(task);
+            {
+                std::lock_guard<std::mutex> dlock(pool->done.mutex);
+                pool->done.tasks.push(task);
+            }
+            /* Notify main thread via self-pipe (best-effort, non-blocking) */
+            char byte = 1;
+            write(pool->notify_pipe[1], &byte, 1);
         } else {
             delete task;
         }
@@ -184,6 +197,14 @@ ThreadPool* thread_pool_create(int num_workers, int max_pending) {
 
     pool->num_workers = num_workers;
     pool->max_pending = max_pending;
+
+    if (pipe(pool->notify_pipe) != 0) {
+        delete pool;
+        return NULL;
+    }
+    fcntl(pool->notify_pipe[0], F_SETFL, O_NONBLOCK);
+    fcntl(pool->notify_pipe[1], F_SETFL, O_NONBLOCK);
+
     pool->threads.reserve(num_workers);
 
     for (int i = 0; i < num_workers; i++) {
@@ -249,6 +270,11 @@ void thread_pool_destroy(ThreadPool* pool) {
         delete pool->done.tasks.front();
         pool->done.tasks.pop();
     }
+
+    if (pool->notify_pipe[0] >= 0)
+        close(pool->notify_pipe[0]);
+    if (pool->notify_pipe[1] >= 0)
+        close(pool->notify_pipe[1]);
 
     delete pool;
 }
@@ -384,4 +410,8 @@ void thread_pool_wait_idle(ThreadPool* pool) {
 void thread_pool_smw_callback(void* context, uint64_t mon_time) {
     (void)mon_time;
     thread_pool_process_completions(static_cast<ThreadPool*>(context));
+}
+
+int thread_pool_get_notify_fd(ThreadPool* pool) {
+    return pool ? pool->notify_pipe[0] : -1;
 }

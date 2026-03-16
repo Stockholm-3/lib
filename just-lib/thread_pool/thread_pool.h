@@ -161,6 +161,17 @@ void thread_pool_wait_idle(ThreadPool* pool);
  */
 void thread_pool_smw_callback(void* context, uint64_t mon_time);
 
+/**
+ * Return the read end of the internal completion-notification pipe.
+ *
+ * Register this fd with epoll (EPOLLIN | EPOLLET).  When it becomes
+ * readable, drain it and call thread_pool_process_completions() to
+ * dispatch done callbacks on the main thread without polling.
+ *
+ * @return fd >= 0 on success, -1 if pool is NULL.
+ */
+int thread_pool_get_notify_fd(ThreadPool* pool);
+
 #ifdef __cplusplus
 }
 #endif
